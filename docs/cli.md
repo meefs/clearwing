@@ -154,6 +154,48 @@ FastAPI-based. REST endpoints for session management and metrics;
 WebSocket endpoint for live agent streaming. Requires `clearwing[web]`
 extras (`pip install -e '.[web]'`).
 
+## `setup` / `init` — interactive provider wizard
+
+```bash
+clearwing setup                              # menu-driven
+clearwing setup --provider openrouter        # skip the menu
+clearwing setup --provider ollama --no-test  # skip the live test
+clearwing setup -y                           # skip confirmations
+clearwing init                               # alias — same wizard
+```
+
+Walks through LLM backend selection, credential entry, optional
+connection testing, and persistence to `~/.clearwing/config.yaml`.
+The menu currently lists Anthropic, OpenRouter, Ollama, LM Studio,
+OpenAI, Together, Groq, Fireworks, DeepSeek, and a "custom
+OpenAI-compatible endpoint" catch-all. Safe to re-run — existing
+config is shown and can be overwritten.
+
+The wizard offers to store credentials as `${ENV_VAR_NAME}`
+references (pulled from your shell at runtime) instead of literal
+secrets, so the YAML file never contains an api_key value.
+
+## `doctor` — environment health check
+
+```bash
+clearwing doctor                       # full probe with live LLM test
+clearwing doctor --skip-llm-invoke     # skip the test prompt
+clearwing doctor --json                # machine-readable output for CI
+```
+
+Runs ~25 checks across: Python version, clearwing version, LLM
+provider resolution (with an optional live test-invoke), filesystem
+(`~/.clearwing/` writable, `config.yaml` valid, `clearwing.log`
+writable), Docker daemon reachability, external CLI tools (git, rg,
+gh, gdb, strace), optional Python extras (langchain-ollama,
+langchain-google-genai, playwright, sentence-transformers, fastapi,
+pymetasploit3, chromadb), and network reachability to the configured
+LLM endpoint. Prints a per-section summary with green-yellow-red
+glyphs plus a totals panel at the bottom.
+
+Exit code is 0 when every check is ok/warn and 1 when any check is
+in error state — useful in CI pipelines (`clearwing doctor || exit 1`).
+
 ## `config` — show/edit config
 
 ```bash

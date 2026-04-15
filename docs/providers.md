@@ -13,6 +13,41 @@ Clearwing talks to any of five LLM backends:
 
 This page walks through each backend with copy-paste snippets.
 
+## Fastest path: `clearwing setup`
+
+If you just installed Clearwing and want to get going, run:
+
+```bash
+clearwing setup
+```
+
+You'll get a menu of every supported provider, prompts for the API
+key and model, an optional live-invoke test, and the result written
+to `~/.clearwing/config.yaml`. The wizard offers to store API keys
+as `${ENV_VAR}` references pulled from your shell at runtime, so
+you don't have to commit secrets to the file.
+
+Direct variants:
+
+```bash
+clearwing setup --provider openrouter
+clearwing setup --provider ollama --no-test
+clearwing init   # alias
+```
+
+Then run `clearwing doctor` to validate your environment:
+
+```bash
+clearwing doctor
+```
+
+Doctor probes Python version, credentials, Docker daemon, external
+CLI tools (git, ripgrep, gh), optional Python extras, filesystem
+permissions, and network reachability to the configured LLM
+endpoint — plus an optional live test-invoke with the resolved
+model. Green/yellow/red table output with actionable hints on every
+warning or error.
+
 ## How Clearwing picks an LLM
 
 Four sources, highest precedence first:

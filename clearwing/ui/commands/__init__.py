@@ -3,6 +3,7 @@
 from . import (
     ci,
     config,
+    doctor,
     graph,
     history,
     interactive,
@@ -12,11 +13,14 @@ from . import (
     report,
     scan,
     sessions,
+    setup,
     sourcehunt,
     webui,
 )
 
 ALL_COMMANDS = [
+    setup,
+    doctor,
     scan,
     report,
     history,

@@ -30,11 +30,14 @@ class CLI:
         parser = self._create_parser()
         parsed_args = parser.parse_args(args)
 
-        # Dispatch to the matching command module
+        # Dispatch to the matching command module. A module's base name
+        # matches the subcommand it registers; command modules may also
+        # declare an `ALIASES` tuple so `clearwing init` can route to
+        # `setup`, etc.
         for cmd_module in ALL_COMMANDS:
-            # Module name is the last part of the dotted path (e.g. "scan")
             cmd_name = cmd_module.__name__.rsplit(".", 1)[-1]
-            if parsed_args.command == cmd_name:
+            aliases = getattr(cmd_module, "ALIASES", ())
+            if parsed_args.command == cmd_name or parsed_args.command in aliases:
                 cmd_module.handle(self, parsed_args)
                 return
 

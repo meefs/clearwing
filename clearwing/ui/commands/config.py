@@ -95,10 +95,26 @@ def _apply_set_provider(cli, pairs: list[str]) -> None:
     current.update(updates)
     cli.config.set("provider", value=current)
 
-    # Persist to ~/.clearwing/config.yaml — create the directory if needed.
+    # Persist to ~/.clearwing/config.yaml, preserving any other sections
+    # in the file. We avoid `cli.config.save()` because that would dump
+    # the full merged default config (including the 1024-port scanning
+    # defaults) — ballooning the file for a 3-key write.
+    import yaml
+
     path = cli.config.DEFAULT_CONFIG_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
-    cli.config.save(str(path))
+
+    existing: dict = {}
+    if path.exists():
+        try:
+            loaded = yaml.safe_load(path.read_text()) or {}
+            if isinstance(loaded, dict):
+                existing = loaded
+        except Exception:
+            existing = {}
+
+    existing["provider"] = current
+    path.write_text(yaml.safe_dump(existing, default_flow_style=False, sort_keys=True))
 
     cli.console.print(f"[green]Saved provider config to {path}[/green]")
     _show_provider(cli)

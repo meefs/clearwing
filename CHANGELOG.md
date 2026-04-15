@@ -8,6 +8,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **`clearwing setup` / `clearwing init`** — interactive provider
+  wizard. Menu-driven selection from 10 backends (Anthropic,
+  OpenRouter, Ollama, LM Studio, OpenAI, Together, Groq, Fireworks,
+  DeepSeek, custom OpenAI-compatible), per-provider credential
+  prompts with `${ENV_VAR}` reference support (so secrets don't land
+  in the file), optional live test-invoke before writing, and
+  persistence to `~/.clearwing/config.yaml`. `--provider KEY` skips
+  the menu for scripted use; `-y` skips confirmations; `--no-test`
+  skips the live test. `init` is a dispatcher alias for the same
+  command.
+- **`clearwing doctor`** — environment health check. Runs ~25
+  probes across: Python version (`>=3.10`), clearwing version,
+  LLM provider resolution + optional live test-invoke, filesystem
+  (`~/.clearwing/` writable, `config.yaml` valid YAML, log file
+  writable), Docker daemon reachability, external CLI tools (git,
+  ripgrep, gh, gdb, strace), optional Python extras (langchain-ollama,
+  langchain-google-genai, playwright, sentence-transformers, fastapi,
+  pymetasploit3, chromadb), and TCP/DNS reachability to the currently-
+  configured LLM endpoint. Per-section Rich tables with green/yellow/
+  red glyphs and actionable hints. `--json` emits machine-readable
+  output for CI use. Exit 0 on ok/warn, 1 on any err.
+- **`clearwing/providers/catalog.py`** — shared `ProviderPreset`
+  dataclass + `PROVIDER_PRESETS` tuple listing every known backend
+  with its base URL, default model, docs URL, and env-var convention.
+  Consumed by both the setup wizard and the doctor command so
+  adding a new provider means one catalog entry.
+- **Subcommand alias mechanism** — command modules can declare an
+  `ALIASES: tuple[str, ...]` to route extra names through the same
+  handler (e.g. `clearwing init` dispatches to `setup`).
+- **`tests/test_setup_and_doctor.py`** — 27 tests across 10 classes
+  covering catalog completeness, secret-masking, YAML write merging
+  (preserves unrelated sections, doesn't bloat with default ports),
+  doctor result aggregation, individual doctor checks (Python,
+  filesystem, optional extras, LLM credentials with/without env
+  vars), and the doctor handle()'s exit-code logic (err → 1,
+  ok/warn → 0).
+
 - **Multi-provider LLM support**. Clearwing now talks to any
   OpenAI-compatible endpoint — OpenRouter, Ollama (`/v1`),
   LM Studio, vLLM, Together, Groq, Fireworks, DeepSeek, OpenAI
@@ -54,6 +91,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   known hosts, api_key placeholder behavior, `LLMEndpoint` helper
   properties, and both `ProviderManager.for_endpoint` /
   `from_config` factories.
+
+### Fixed
+
+- **`clearwing config --set-provider` config.yaml bloat regression**.
+  The prior `cli.config.save()` path dumped the full merged default
+  config (including the 1024-port scanning defaults) into
+  `~/.clearwing/config.yaml`, ballooning the file to ~1000 lines for
+  a 3-key write. Both `setup` and `config --set-provider` now read
+  the existing YAML, merge in the `provider:` section, and write
+  back — preserving unrelated sections untouched and keeping the
+  file compact.
 
 ### Changed
 

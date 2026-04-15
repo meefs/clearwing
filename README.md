@@ -32,7 +32,22 @@ authorization, and disclosure. See `SECURITY.md`.
 python3 -m venv venv && source venv/bin/activate
 pip install 'git+https://github.com/Lazarus-AI/clearwing.git@v1.0.0#egg=clearwing[all]'
 
-# Anthropic direct (default)
+# Interactive setup wizard — menu-driven provider selection,
+# credential entry, optional live test, persists to ~/.clearwing/config.yaml
+clearwing setup
+
+# Environment check — verifies Python, credentials, Docker daemon,
+# external tools, optional extras, and network reachability
+clearwing doctor
+
+clearwing --version   # 1.0.0
+clearwing --help
+```
+
+Or skip the wizard and configure directly:
+
+```bash
+# Anthropic direct
 export ANTHROPIC_API_KEY=sk-ant-...
 
 # Or any OpenAI-compatible endpoint — OpenRouter, Ollama, LM Studio,
@@ -40,9 +55,6 @@ export ANTHROPIC_API_KEY=sk-ant-...
 export CLEARWING_BASE_URL=https://openrouter.ai/api/v1
 export CLEARWING_API_KEY=sk-or-...
 export CLEARWING_MODEL=anthropic/claude-opus-4
-
-clearwing --version   # 1.0.0
-clearwing --help
 ```
 
 See [`docs/providers.md`](docs/providers.md) for provider-specific

@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+from clearwing.providers.catalog import (
+    PROVIDER_PRESETS as KNOWN_PROVIDERS,
+)
+from clearwing.providers.catalog import (
+    ProviderPreset,
+    preset_by_key,
+)
 from clearwing.providers.env import (
     DEFAULT_ANTHROPIC_MODEL,
     ENV_ANTHROPIC_KEY,
@@ -32,4 +39,8 @@ __all__ = [
     "ModelRoute",
     "PROVIDER_PRESETS",
     "DEFAULT_ROUTES",
+    # Provider catalog (for the setup wizard + doctor command)
+    "KNOWN_PROVIDERS",
+    "ProviderPreset",
+    "preset_by_key",
 ]
