@@ -1,5 +1,6 @@
 """Sourcehunt CLI subcommand — runs the Overwing source-code vulnerability pipeline."""
 
+import os
 import sys
 
 
@@ -184,6 +185,23 @@ def add_parser(subparsers):
         "--model", default=None, help="Override all role models with one model name"
     )
     parser.add_argument(
+        "--base-url",
+        default=None,
+        metavar="URL",
+        help="OpenAI-compatible API base URL. Point at OpenRouter, Ollama "
+        "(http://localhost:11434/v1), LM Studio (http://localhost:1234/v1), "
+        "vLLM, Together, Groq, etc. Overrides ANTHROPIC_API_KEY for this run. "
+        "Also settable via the CLEARWING_BASE_URL env var.",
+    )
+    parser.add_argument(
+        "--api-key",
+        default=None,
+        metavar="KEY",
+        help="API key for the --base-url endpoint. Also settable via the "
+        "CLEARWING_API_KEY env var. Use any placeholder for fully-local "
+        "endpoints like Ollama / LM Studio that ignore it.",
+    )
+    parser.add_argument(
         "--output-dir",
         default="./sourcehunt-results",
         help="Output directory (default: ./sourcehunt-results)",
@@ -200,8 +218,20 @@ def add_parser(subparsers):
 
 def handle(cli, args):
     """Run the sourcehunt pipeline."""
+    from ...providers import ProviderManager, resolve_llm_endpoint
     from ...sourcehunt.pool import TierBudget
     from ...sourcehunt.runner import SourceHuntRunner
+
+    # Resolve the LLM endpoint once at the top of the command.
+    # CLI > env > ~/.clearwing/config.yaml > ANTHROPIC_API_KEY default.
+    endpoint = resolve_llm_endpoint(
+        cli_model=args.model,
+        cli_base_url=getattr(args, "base_url", None),
+        cli_api_key=getattr(args, "api_key", None),
+        config_provider=cli.config.get_provider_section() or None,
+    )
+    cli.console.print(f"[dim]LLM endpoint: {endpoint.describe()}[/dim]")
+    provider_manager = ProviderManager.for_endpoint(endpoint)
 
     # Parse tier-split
     try:
@@ -238,21 +268,15 @@ def handle(cli, args):
         if not args.patch_source:
             cli.console.print("[red]Error: --retro-hunt requires --patch-source[/red]")
             sys.exit(1)
-        # Build an LLM for rule generation
-        import os
-
-        llm = None
-        if os.environ.get("ANTHROPIC_API_KEY"):
-            try:
-                from langchain_anthropic import ChatAnthropic
-
-                llm = ChatAnthropic(model="claude-sonnet-4-6")
-            except Exception as e:
-                cli.console.print(f"[red]Could not build LLM: {e}[/red]")
-                sys.exit(1)
-        if llm is None:
+        # Build an LLM for rule generation via the same resolved
+        # endpoint as the rest of the pipeline.
+        try:
+            llm = provider_manager.get_llm("default")
+        except Exception as e:
+            cli.console.print(f"[red]Could not build LLM: {e}[/red]")
             cli.console.print(
-                "[red]Error: retro-hunt requires an LLM. Set ANTHROPIC_API_KEY.[/red]"
+                "[red]Set ANTHROPIC_API_KEY, CLEARWING_BASE_URL, "
+                "or pass --base-url/--api-key.[/red]"
             )
             sys.exit(1)
 
@@ -279,8 +303,6 @@ def handle(cli, args):
 
     # Webhook mode: start an HTTP server that runs sourcehunt on each commit
     if args.webhook:
-        import os as _os
-
         from ...sourcehunt.commit_monitor import CommitMonitor, CommitMonitorConfig
         from ...sourcehunt.webhook_server import (
             WebhookConfig,
@@ -295,7 +317,7 @@ def handle(cli, args):
             )
             sys.exit(1)
 
-        secret = args.webhook_secret or _os.environ.get("GITHUB_WEBHOOK_SECRET", "")
+        secret = args.webhook_secret or os.environ.get("GITHUB_WEBHOOK_SECRET", "")
         if not secret:
             cli.console.print(
                 "[red]Error: webhook mode requires a shared secret "
@@ -336,8 +358,6 @@ def handle(cli, args):
 
     # Watch mode dispatches to the CommitMonitor instead of a one-shot runner
     if args.watch:
-        import os
-
         from ...sourcehunt.commit_monitor import CommitMonitor, CommitMonitorConfig
 
         local_path = args.local_path or args.repo
@@ -397,6 +417,7 @@ def handle(cli, args):
         disclosure_reporter_affiliation=args.reporter_affiliation,
         disclosure_reporter_email=args.reporter_email,
         model_override=args.model,
+        provider_manager=provider_manager,
     )
 
     cli.console.print(

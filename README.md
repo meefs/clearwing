@@ -26,15 +26,35 @@ authorization, and disclosure. See `SECURITY.md`.
 
 ## Install
 
+**End users** — install the tagged release straight from GitHub:
+
+```bash
+python3 -m venv venv && source venv/bin/activate
+pip install 'git+https://github.com/Lazarus-AI/clearwing.git@v1.0.0#egg=clearwing[all]'
+
+# Anthropic direct (default)
+export ANTHROPIC_API_KEY=sk-ant-...
+
+# Or any OpenAI-compatible endpoint — OpenRouter, Ollama, LM Studio,
+# vLLM, Together, Groq, DeepSeek, OpenAI:
+export CLEARWING_BASE_URL=https://openrouter.ai/api/v1
+export CLEARWING_API_KEY=sk-or-...
+export CLEARWING_MODEL=anthropic/claude-opus-4
+
+clearwing --version   # 1.0.0
+clearwing --help
+```
+
+See [`docs/providers.md`](docs/providers.md) for provider-specific
+recipes and per-task routing.
+
+**Developers** — clone and install editable so you can run `make gate`:
+
 ```bash
 git clone https://github.com/Lazarus-AI/clearwing.git
 cd clearwing
-python3 -m venv venv
-source venv/bin/activate
+python3 -m venv venv && source venv/bin/activate
 pip install -e '.[dev]'
-
-export ANTHROPIC_API_KEY=sk-ant-...
-clearwing --help
 ```
 
 Faster alternative with [uv](https://docs.astral.sh/uv/) — reproduces
@@ -98,6 +118,7 @@ Deep dives live in [`docs/`](docs/):
 |---|---|
 | [`docs/index.md`](docs/index.md) | Landing page + table of contents |
 | [`docs/quickstart.md`](docs/quickstart.md) | Full install + first run walkthrough |
+| [`docs/providers.md`](docs/providers.md) | OpenRouter / Ollama / LM Studio / vLLM / Together / Groq recipes, per-task routing, env-var precedence |
 | [`docs/architecture.md`](docs/architecture.md) | Both pipelines, substrate, capability gating, tool layout |
 | [`docs/cli.md`](docs/cli.md) | Every subcommand flag, grouped by workflow |
 | [`docs/api.md`](docs/api.md) | API reference (mkdocstrings autogen) |

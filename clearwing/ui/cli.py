@@ -9,6 +9,8 @@ import logging
 
 from rich.console import Console
 
+from clearwing import __version__
+
 from ..core import Config, CoreEngine
 from .commands import ALL_COMMANDS
 
@@ -43,6 +45,12 @@ class CLI:
         parser = argparse.ArgumentParser(
             prog="clearwing",
             description="Clearwing - Comprehensive Vulnerability Scanner and Exploiter",
+        )
+        parser.add_argument(
+            "-V",
+            "--version",
+            action="version",
+            version=f"clearwing {__version__}",
         )
 
         subparsers = parser.add_subparsers(dest="command", help="Available commands")

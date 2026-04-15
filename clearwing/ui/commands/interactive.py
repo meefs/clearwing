@@ -93,11 +93,22 @@ def _preflight_check(cli, args) -> bool:
     """Fast checks before agent starts."""
     errors = []
 
-    has_custom_endpoint = getattr(args, "base_url", None)
-    if not has_custom_endpoint and not os.environ.get("ANTHROPIC_API_KEY"):
+    # Any of these sources is enough to build an LLM:
+    #   CLI flags (--base-url / --api-key)
+    #   CLEARWING_BASE_URL / CLEARWING_API_KEY env vars
+    #   ANTHROPIC_API_KEY env var (the pre-multi-provider default)
+    has_cli_endpoint = bool(getattr(args, "base_url", None) or getattr(args, "api_key", None))
+    has_clearwing_env = bool(
+        os.environ.get("CLEARWING_BASE_URL") or os.environ.get("CLEARWING_API_KEY")
+    )
+    has_anthropic_env = bool(os.environ.get("ANTHROPIC_API_KEY"))
+    if not (has_cli_endpoint or has_clearwing_env or has_anthropic_env):
         errors.append(
-            "ANTHROPIC_API_KEY environment variable is not set. "
-            "Or use --base-url for an OpenAI-compatible endpoint."
+            "No LLM credentials found. Set ANTHROPIC_API_KEY for Anthropic direct, "
+            "or CLEARWING_BASE_URL + CLEARWING_API_KEY for an OpenAI-compatible endpoint "
+            "(OpenRouter, Ollama, LM Studio, vLLM, etc.), "
+            "or pass --base-url and --api-key on the command line. "
+            "See docs/providers.md for the full list of supported backends."
         )
 
     if args.target:
@@ -106,12 +117,16 @@ def _preflight_check(cli, args) -> bool:
         except socket.gaierror:
             errors.append(f"Target '{args.target}' is not a valid IP or resolvable hostname.")
 
-    valid_models = ["claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5"]
-    if args.model not in valid_models:
-        cli.console.print(
-            f"[yellow]Warning: Model '{args.model}' is not a recognized model. "
-            f"Known models: {', '.join(valid_models)}[/yellow]"
-        )
+    # Skip the "valid model" warning when the user is pointing at a
+    # custom endpoint — we have no way to know what models OpenRouter /
+    # Ollama / LM Studio / vLLM serve.
+    if not has_cli_endpoint and not has_clearwing_env:
+        valid_models = ["claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5"]
+        if args.model not in valid_models:
+            cli.console.print(
+                f"[yellow]Warning: Model '{args.model}' is not a recognized Anthropic "
+                f"model. Known models: {', '.join(valid_models)}[/yellow]"
+            )
 
     if errors:
         for err in errors:

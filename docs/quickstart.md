@@ -25,14 +25,32 @@ Clearwing talks to Anthropic by default. Either export the API key:
 export ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-Or use an OpenAI-compatible endpoint for local / custom models:
+Or use an OpenAI-compatible endpoint (OpenRouter, Ollama, LM Studio,
+vLLM, Together, Groq, DeepSeek, OpenAI, ...):
 
 ```bash
+# Per-command
 clearwing interactive \
-    --base-url http://localhost:8000/v1 \
-    --api-key not-needed \
-    --model qwen2.5-coder:32b-instruct
+    --base-url https://openrouter.ai/api/v1 \
+    --api-key "$OPENROUTER_API_KEY" \
+    --model anthropic/claude-opus-4
+
+# Per-session
+export CLEARWING_BASE_URL=https://openrouter.ai/api/v1
+export CLEARWING_API_KEY=$OPENROUTER_API_KEY
+export CLEARWING_MODEL=anthropic/claude-opus-4
+clearwing interactive
+
+# Persistent
+clearwing config --set-provider \
+    base_url=http://localhost:11434/v1 \
+    api_key=ollama \
+    model=qwen2.5-coder:32b
 ```
+
+See [LLM providers](providers.md) for copy-paste snippets for every
+supported backend, including per-task routing (e.g. "hunter on
+OpenRouter, verifier on local Qwen for cross-provider independence").
 
 ## Run a network scan
 

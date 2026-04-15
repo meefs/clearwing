@@ -69,10 +69,63 @@ class Config:
         "database": {"path": "clearwing.db", "auto_backup": True},
     }
 
+    #: Default path searched when no explicit config_file is passed.
+    #: Users can put provider / scan / exploitation settings here and
+    #: they persist across sessions.
+    DEFAULT_CONFIG_PATH = Path.home() / ".clearwing" / "config.yaml"
+
     def __init__(self, config_file: str | None = None):
         self.config = self.DEFAULT_CONFIG.copy()
+        # Always try the default path first — users expect
+        # `~/.clearwing/config.yaml` to be auto-discovered.
+        if self.DEFAULT_CONFIG_PATH.exists():
+            self.load(str(self.DEFAULT_CONFIG_PATH))
         if config_file:
             self.load(config_file)
+
+    # ---- Provider section accessors --------------------------------------
+
+    def get_provider_section(self) -> dict[str, Any]:
+        """Return the `provider:` section of the config, or {}.
+
+        Shape (all fields optional):
+            provider:
+              base_url: https://openrouter.ai/api/v1
+              api_key: ${OPENROUTER_API_KEY}
+              model: anthropic/claude-opus-4
+        """
+        section = self.config.get("provider")
+        return dict(section) if isinstance(section, dict) else {}
+
+    def get_providers_config(self) -> dict[str, Any]:
+        """Return the full multi-provider routing config.
+
+        Shape (all fields optional):
+            providers:
+              openrouter:
+                base_url: https://openrouter.ai/api/v1
+                api_key: ${OPENROUTER_API_KEY}
+              local_llama:
+                base_url: http://localhost:11434/v1
+                api_key: ollama
+            routes:
+              default: openrouter
+              hunter: openrouter
+              verifier: local_llama
+            task_models:
+              hunter: anthropic/claude-opus-4
+              verifier: qwen2.5-coder:32b
+        """
+        out: dict[str, Any] = {}
+        if "provider" in self.config:
+            out["provider"] = self.config["provider"]
+        if "providers" in self.config:
+            out["providers"] = self.config["providers"]
+        if "routes" in self.config:
+            out["routes"] = self.config["routes"]
+        if "task_models" in self.config:
+            out["task_models"] = self.config["task_models"]
+        return out
 
     def load(self, config_file: str) -> None:
         """Load configuration from a YAML file."""

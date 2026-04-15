@@ -43,8 +43,13 @@ clearwing sourcehunt <repo_url_or_path>
   [--disclosure-reporter-affiliation AFFILIATION]
   [--disclosure-reporter-email EMAIL]
   [--model MODEL_NAME]        # override per-task model selection
+  [--base-url URL]            # OpenAI-compat endpoint (OpenRouter, Ollama, ...)
+  [--api-key KEY]             # credential for --base-url
   [-o OUTPUT_DIR]             # default: ./sourcehunt-results
 ```
+
+See [LLM providers](providers.md) for the full precedence rules and
+provider-specific snippets.
 
 Depths:
 - **`quick`** — preprocessor + ranker + static findings. No LLM
@@ -153,12 +158,25 @@ extras (`pip install -e '.[web]'`).
 
 ```bash
 clearwing config                   # print current config
-clearwing config edit              # open ~/.clearwing/config.yaml in $EDITOR
+clearwing config --show-provider   # print resolved LLM endpoint + source
+clearwing config --set-provider \
+    base_url=https://openrouter.ai/api/v1 \
+    api_key='${OPENROUTER_API_KEY}' \
+    model=anthropic/claude-opus-4  # persist to ~/.clearwing/config.yaml
 ```
 
 ## Global flags
 
 - `-h`, `--help` — command-level help
-- `--version` *(planned for v1.0)* — print version
+- `-V`, `--version` — print version (`clearwing 1.0.0`)
 - `--log-level debug|info|warning|error` — root logger level
 - `--log-file PATH` — redirect logs away from `~/.clearwing/clearwing.log`
+
+## Global env vars
+
+- `ANTHROPIC_API_KEY` — Anthropic direct credential (default LLM path)
+- `CLEARWING_BASE_URL` — OpenAI-compatible endpoint override (OpenRouter,
+  Ollama, LM Studio, vLLM, Together, Groq, etc.)
+- `CLEARWING_API_KEY` — credential for the `CLEARWING_BASE_URL` endpoint
+- `CLEARWING_MODEL` — model name for the endpoint
+- `GITHUB_WEBHOOK_SECRET` — HMAC secret for `sourcehunt --webhook`

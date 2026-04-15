@@ -404,35 +404,28 @@ def build_react_graph(
     return graph.compile(checkpointer=checkpointer)
 
 
-def _create_llm(model_name: str, base_url: str = None, api_key: str = None) -> BaseChatModel:
-    """Create an LLM instance.
+def _create_llm(
+    model_name: str,
+    base_url: str | None = None,
+    api_key: str | None = None,
+) -> BaseChatModel:
+    """Create an LLM instance from a CLI-flag triple.
 
-    When *base_url* is provided the model is accessed via the OpenAI-compatible
-    API (works with vLLM, Ollama, MLX, OpenRouter, etc.).  Otherwise the
-    default Anthropic provider is used.
+    Threads the call through `clearwing.providers.resolve_llm_endpoint`
+    so that CLEARWING_BASE_URL / CLEARWING_API_KEY / CLEARWING_MODEL
+    env vars are honored even when the caller only passed `model_name`.
+    When the resolved endpoint has a `base_url`, routes through the
+    OpenAI-compatible transport (works with OpenRouter, Ollama,
+    LM Studio, vLLM, Together, Groq, etc.).
     """
-    if base_url:
-        try:
-            from langchain_openai import ChatOpenAI
-        except ImportError as e:
-            raise ImportError(
-                "langchain-openai is required for custom endpoints. "
-                "Install with: pip install langchain-openai"
-            ) from e
-        kwargs: dict = {"model": model_name, "base_url": base_url}
-        if api_key:
-            kwargs["api_key"] = api_key
-        else:
-            # Some local servers don't need a key; set a dummy to avoid errors
-            kwargs["api_key"] = "not-needed"
-        return ChatOpenAI(**kwargs)
+    from clearwing.providers import ProviderManager, resolve_llm_endpoint
 
-    from langchain_anthropic import ChatAnthropic
-
-    kwargs = {"model": model_name}
-    if api_key:
-        kwargs["api_key"] = api_key
-    return ChatAnthropic(**kwargs)
+    endpoint = resolve_llm_endpoint(
+        cli_model=model_name,
+        cli_base_url=base_url,
+        cli_api_key=api_key,
+    )
+    return ProviderManager.for_endpoint(endpoint).get_llm("default")
 
 
 def create_agent(

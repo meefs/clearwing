@@ -44,6 +44,10 @@ dependencies = [
     "langgraph>=0.2.0",
     "langchain-core>=0.3.0",
     "langchain-anthropic>=0.3.0",
+    # OpenAI-compatible provider support — covers OpenRouter, Ollama,
+    # LM Studio, vLLM, Together, and any `/v1/chat/completions`
+    # endpoint that speaks the OpenAI dialect.
+    "langchain-openai>=0.3.0",
     "docker>=7.0.0",
     # TUI
     "textual>=0.47.0",
@@ -66,6 +70,13 @@ dependencies = [
 [project.optional-dependencies]
 metasploit = ["pymetasploit3>=1.0.0"]
 browser = ["playwright>=1.40.0"]
+# Native Ollama transport — the OpenAI-compat endpoint at
+# http://localhost:11434/v1 works out-of-the-box via langchain-openai,
+# but the native integration has tighter tool-calling and streaming
+# semantics on some models. Install with `pip install clearwing[ollama]`.
+ollama = ["langchain-ollama>=0.2.0"]
+# Google Gemini support.
+google = ["langchain-google-genai>=2.0.0"]
 vector = [
     "sentence-transformers>=2.2.0",
 ]
@@ -87,7 +98,7 @@ docs = [
     "mkdocstrings[python]>=0.24.0",
 ]
 all = [
-    "clearwing[metasploit,browser,vector,web,dev,docs]",
+    "clearwing[metasploit,browser,vector,web,dev,docs,ollama,google]",
 ]
 
 [project.urls]

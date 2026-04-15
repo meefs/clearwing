@@ -6,7 +6,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-_No changes yet. Post-1.0.0 work lands here._
+### Added
+
+- **Multi-provider LLM support**. Clearwing now talks to any
+  OpenAI-compatible endpoint — OpenRouter, Ollama (`/v1`),
+  LM Studio, vLLM, Together, Groq, Fireworks, DeepSeek, OpenAI
+  direct — in addition to the original Anthropic-direct path.
+  Every command that builds an LLM (`interactive`, `sourcehunt`,
+  `operate`, `ci`, `parallel`, `scan`) threads through a single
+  `resolve_llm_endpoint()` helper so the configuration precedence
+  is identical across the tool.
+- **Three ways to configure the provider**, with clear precedence:
+  1. CLI flags: `--base-url`, `--api-key`, `--model`
+  2. Env vars: `CLEARWING_BASE_URL`, `CLEARWING_API_KEY`, `CLEARWING_MODEL`
+  3. Config file: `~/.clearwing/config.yaml` `provider:` section
+  4. Default: Anthropic direct via `ANTHROPIC_API_KEY`
+- **`clearwing config --set-provider`** — one-line provider setup
+  that persists to `~/.clearwing/config.yaml` without editing YAML
+  by hand. Accepts `base_url=...`, `api_key=...`, `model=...`
+  pairs. Supports `${ENV_VAR}` interpolation for the api_key so
+  secrets stay out of the file.
+- **`clearwing config --show-provider`** — prints the effective
+  resolved endpoint (model / base_url / source) for debugging why a
+  particular backend was chosen.
+- **`docs/providers.md`** — copy-paste snippets for every supported
+  backend, including per-task routing for source-hunt runs
+  ("hunter on OpenRouter Opus, verifier on local Qwen for
+  cross-provider independence").
+- **`ProviderManager.for_endpoint(endpoint)`** factory — constructs
+  a manager where every task (`ranker`/`hunter`/`verifier`/
+  `sourcehunt_exploit`/`default`) routes to one cached LLM instance.
+  The common "one endpoint for everything" case.
+- **`ProviderManager.from_config(cfg)`** factory — reads a parsed
+  YAML `providers:` + `routes:` + `task_models:` section and builds
+  the multi-endpoint routing the plan's §Provider routing section
+  describes.
+- **`clearwing --version`** / **`-V`** flag (was missing — just
+  `clearwing --help` existed).
+- **`[ollama]` optional-dependencies extra** — `pip install
+  clearwing[ollama]` adds `langchain-ollama` for the native Ollama
+  transport (the OpenAI-compat endpoint at `http://localhost:11434/v1`
+  works out of the box without this).
+- **`[google]` optional-dependencies extra** — `pip install
+  clearwing[google]` adds `langchain-google-genai` for Gemini.
+- **`tests/test_providers_env.py`** — 32 tests covering the CLI/env/
+  config/default precedence ladder, default-model guessing from
+  known hosts, api_key placeholder behavior, `LLMEndpoint` helper
+  properties, and both `ProviderManager.for_endpoint` /
+  `from_config` factories.
+
+### Changed
+
+- **`langchain-openai` is now a runtime dependency**, not a lazy
+  `try/except ImportError` import. Every OpenAI-compatible endpoint
+  works out of the box after `pip install clearwing` — no extra
+  install needed for OpenRouter / Ollama / LM Studio / vLLM.
+- **`clearwing sourcehunt` gains `--base-url` and `--api-key` flags**
+  and threads them through to `SourceHuntRunner` via the new
+  `ProviderManager.for_endpoint()` path. Previously sourcehunt was
+  hardcoded to Anthropic.
+- **`clearwing interactive` preflight** — "no ANTHROPIC_API_KEY"
+  error message now lists all three credential sources (env var,
+  CLEARWING_* triple, CLI flags) and points at `docs/providers.md`.
+- **`~/.clearwing/config.yaml`** is auto-discovered on `Config()`
+  construction. Previously only explicit `Config(path)` worked.
+- **README install block** documents the full provider matrix
+  alongside the `pip install git+...@v1.0.0` tagged-release path.
 
 ## [1.0.0] — 2026-04-14
 

@@ -790,46 +790,72 @@ class SourceHuntRunner:
 
         Resolution order:
           1. Explicit kwarg override (ranker_llm=, hunter_llm=, etc.)
-          2. self.model_override (single model for all tasks)
-          3. self.provider_manager.get_llm(task)
-          4. None — caller falls back to a no-LLM path
+          2. self.provider_manager (injected by the sourcehunt CLI
+             command, which builds one from `resolve_llm_endpoint()`)
+          3. self.model_override (single model for all tasks,
+             resolved through the endpoint layer)
+          4. A default `ProviderManager.for_endpoint(resolve_llm_endpoint())`
+             — which picks up CLEARWING_BASE_URL / CLEARWING_API_KEY /
+             CLEARWING_MODEL env vars or falls through to Anthropic
+             direct via ANTHROPIC_API_KEY.
+          5. None — caller falls back to a no-LLM path
         """
         import os
 
+        from clearwing.providers import (
+            ENV_ANTHROPIC_KEY,
+            ENV_API_KEY,
+            ENV_BASE_URL,
+            ProviderManager,
+            resolve_llm_endpoint,
+        )
+
         if override is not None:
             return override
-        # If no API key is set anywhere, skip LLM entirely (don't even try
-        # to construct one — that throws a noisy stack trace at first .invoke)
-        if not (os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("OPENAI_API_KEY")):
-            logger.debug("No API key in environment; skipping LLM for task=%s", task)
+
+        # Preflight: does *any* credential / endpoint exist? If not,
+        # skip the LLM entirely so we don't throw a noisy stack trace
+        # at first .invoke().
+        has_creds = any(
+            os.environ.get(name)
+            for name in (ENV_BASE_URL, ENV_API_KEY, ENV_ANTHROPIC_KEY, "OPENAI_API_KEY")
+        )
+        if not has_creds:
+            logger.debug("No API key / endpoint in environment; skipping LLM for task=%s", task)
             return None
-        if self.model_override:
-            return self._build_llm_from_model_string(self.model_override)
+
+        # Inject-via-constructor wins (sourcehunt CLI command + tests)
         if self.provider_manager is not None:
             try:
                 return self.provider_manager.get_llm(task)
             except Exception:
-                logger.debug("ProviderManager failed for task=%s", task, exc_info=True)
-        # Try the default ProviderManager
-        try:
-            from clearwing.providers.manager import ProviderManager
+                logger.debug("Injected ProviderManager failed for task=%s", task, exc_info=True)
 
-            pm = ProviderManager()
-            return pm.get_llm(task)
+        # --model override (single model string, routed through the
+        # same endpoint resolution as --base-url)
+        if self.model_override:
+            return self._build_llm_from_model_string(self.model_override)
+
+        # Last resort — build a default manager from the env triple
+        try:
+            endpoint = resolve_llm_endpoint()
+            return ProviderManager.for_endpoint(endpoint).get_llm(task)
         except Exception:
+            logger.debug("Default endpoint resolution failed", exc_info=True)
             return None
 
     def _build_llm_from_model_string(self, model: str) -> Any:
-        """Build a single LLM from a model string. Used by --model override."""
-        try:
-            from langchain_anthropic import ChatAnthropic
+        """Build a single LLM from a model string. Used by --model override.
 
-            # Spread kwargs to match graph.py's construction pattern and
-            # to bypass mypy's strict call-arg check on langchain's Chat*
-            # classes (which declare many required-but-factory-defaulted
-            # fields that can't be expressed in a plain call).
-            kwargs: dict = {"model_name": model}
-            return ChatAnthropic(**kwargs)
+        Honors CLEARWING_BASE_URL / CLEARWING_API_KEY — so `--model
+        anthropic/claude-opus-4` + CLEARWING_BASE_URL=https://openrouter.ai/api/v1
+        lands on OpenRouter, not on Anthropic direct.
+        """
+        try:
+            from clearwing.providers import ProviderManager, resolve_llm_endpoint
+
+            endpoint = resolve_llm_endpoint(cli_model=model)
+            return ProviderManager.for_endpoint(endpoint).get_llm("default")
         except Exception:
             logger.warning("Failed to build LLM from model string", exc_info=True)
             return None
