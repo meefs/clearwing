@@ -972,6 +972,20 @@ class SourceHuntRunner:
                 except Exception:
                     logger.warning("Artifact store failed", exc_info=True)
 
+            # 5.88. v0.6: Auto-commit findings with root_cause_explained (spec 014).
+            try:
+                from .commitment import CommitmentLog
+                committable = filter_by_evidence(verified, "root_cause_explained")
+                if committable:
+                    commitment_log = CommitmentLog()
+                    for f in committable:
+                        commitment_log.commit_finding(f, project=self.repo_url)
+                    logger.info(
+                        "Committed %d findings to commitment log", len(committable),
+                    )
+            except Exception:
+                logger.warning("Auto-commitment failed", exc_info=True)
+
             # 6. Report
             _pool_stats = findings_pool.pool_stats() if findings_pool is not None else None
             _subsystem_stats = (

@@ -1,4 +1,4 @@
-"""Disclosure workflow CLI — clearwing disclose (spec 011).
+"""Disclosure workflow CLI — clearwing disclose (spec 011, 014).
 
 Subcommands:
     queue       Show pending findings awaiting review
@@ -8,6 +8,8 @@ Subcommands:
     send        Generate disclosure and start 90-day CVD timeline
     status      Dashboard of disclosure states
     timeline    Show findings with approaching deadlines
+    verify      Verify a cryptographic commitment against a document
+    commitments Show or export the commitment log
 """
 
 from __future__ import annotations
@@ -60,6 +62,19 @@ def add_parser(subparsers):
     tl = sub.add_parser("timeline", help="Show findings with approaching deadlines")
     tl.add_argument("--days", type=int, default=30, help="Deadline threshold in days")
 
+    # verify (spec 014)
+    vr = sub.add_parser("verify", help="Verify a commitment against a document")
+    vr.add_argument("finding_id", help="Finding ID to verify")
+    vr.add_argument("--document", required=True, help="Path to original document JSON")
+
+    # commitments (spec 014)
+    cm = sub.add_parser("commitments", help="Show or export commitment log")
+    cm.add_argument(
+        "--format", choices=["markdown", "json"], default="markdown",
+        dest="commitment_format",
+        help="Output format (default: markdown)",
+    )
+
     return parser
 
 
@@ -67,7 +82,10 @@ def handle(cli, args):
     """Dispatch to the appropriate disclose subcommand."""
     action = getattr(args, "disclose_action", None)
     if not action:
-        cli.console.print("[yellow]Usage: clearwing disclose <queue|review|validate|reject|send|status|timeline>[/yellow]")
+        cli.console.print(
+            "[yellow]Usage: clearwing disclose "
+            "<queue|review|validate|reject|send|status|timeline|verify|commitments>[/yellow]"
+        )
         return
 
     from clearwing.sourcehunt.disclosure_db import DisclosureDB
@@ -84,6 +102,8 @@ def handle(cli, args):
             "send": _handle_send,
             "status": _handle_status,
             "timeline": _handle_timeline,
+            "verify": _handle_verify,
+            "commitments": _handle_commitments,
         }
         handler = handlers.get(action)
         if handler:
@@ -249,3 +269,43 @@ def _handle_timeline(cli, args, db, workflow):
         )
 
     cli.console.print(table)
+
+
+def _handle_verify(cli, args, db, workflow):
+    from pathlib import Path
+
+    from clearwing.sourcehunt.commitment import CommitmentLog, verify_commitment
+
+    log = CommitmentLog()
+    commitments = log.get_commitments(finding_id=args.finding_id)
+    if not commitments:
+        cli.console.print(
+            f"[yellow]No commitments found for {args.finding_id}[/yellow]",
+        )
+        return
+
+    doc_path = Path(args.document)
+    if not doc_path.exists():
+        cli.console.print(f"[red]Document not found: {args.document}[/red]")
+        return
+    document = doc_path.read_text(encoding="utf-8")
+
+    cli.console.print(
+        f"[bold]Verifying {len(commitments)} commitment(s) "
+        f"for {args.finding_id}:[/bold]",
+    )
+    for c in commitments:
+        match = verify_commitment(document, c.digest)
+        status = "[green]MATCH[/green]" if match else "[red]MISMATCH[/red]"
+        cli.console.print(
+            f"  {c.commitment_type}: {c.digest[:16]}... {status}",
+        )
+
+
+def _handle_commitments(cli, args, db, workflow):
+    from clearwing.sourcehunt.commitment import CommitmentLog
+
+    log = CommitmentLog()
+    fmt = getattr(args, "commitment_format", "markdown")
+    output = log.format_public_table(fmt=fmt)
+    cli.console.print(output)
