@@ -793,6 +793,7 @@ _SPECIALIST_PROMPTS = {
     "kernel_syscall": KERNEL_SYSCALL_HUNTER_PROMPT,
     "crypto_primitive": CRYPTO_PRIMITIVE_HUNTER_PROMPT,
     "web_framework": WEB_FRAMEWORK_HUNTER_PROMPT,
+    "reveng": "",  # reveng uses its own prompt from reveng.py, not _build_hunter_prompt
 }
 
 
@@ -894,6 +895,13 @@ _DEEP_SPECIALIST_FOCUS = {
         "Focus: web application vulnerabilities — injection at trust boundaries (SQL, "
         "command, template), SSRF, authorization bypass, session management, CSRF, "
         "file upload/path traversal, mass assignment, deserialization."
+    ),
+    "reveng": (
+        "Focus: closed-source binary analysis — memory corruption in decompiled code, "
+        "unsafe string handling, integer overflows at trust boundaries, "
+        "authentication/authorization bypasses, hardcoded credentials, "
+        "format string bugs, command injection via user-controlled data. "
+        "Always validate against the binary with GDB."
     ),
 }
 

@@ -402,6 +402,20 @@ def add_parser(subparsers):
         help="Budget band per CVE in --nday mode (default: deep)",
     )
     parser.add_argument(
+        "--reveng", action="store_true", default=False,
+        help="Reverse engineering pipeline: decompile + reconstruct + hunt",
+    )
+    parser.add_argument(
+        "--arch", default="x86_64", choices=["x86_64"],
+        help="Target architecture for --reveng (default: x86_64; v1.0 supports x86_64 only)",
+    )
+    parser.add_argument(
+        "--reveng-budget",
+        choices=["standard", "deep", "campaign"],
+        default="deep",
+        help="Budget band for --reveng hunting (default: deep)",
+    )
+    parser.add_argument(
         "--model", default=None, help="Override all role models with one model name"
     )
     parser.add_argument(
@@ -589,6 +603,69 @@ def handle(cli, args):
                 cli.console.print(f"  [yellow]~ {r.cve_id} — partial[/yellow]")
             elif r.status == "filtered":
                 cli.console.print(f"  [dim]- {r.cve_id} — filtered[/dim]")
+
+        sys.exit(0)
+
+    # Reverse engineering pipeline
+    if getattr(args, "reveng", False):
+        import asyncio
+
+        from ...sourcehunt.reveng import RevengPipeline
+
+        binary_path = args.local_path or args.repo
+        if not os.path.isfile(binary_path):
+            cli.console.print(
+                f"[red]Error: --reveng requires a path to a binary file, "
+                f"got '{binary_path}'[/red]"
+            )
+            sys.exit(1)
+
+        try:
+            llm = provider_manager.get_llm("default")
+        except Exception as e:
+            cli.console.print(f"[red]Could not build LLM: {e}[/red]")
+            sys.exit(1)
+
+        cli.console.print(
+            f"[bold blue]Reveng pipeline: {binary_path} "
+            f"(arch={args.arch}, budget={args.reveng_budget})[/bold blue]"
+        )
+
+        pipeline = RevengPipeline(
+            llm=llm,
+            binary_path=os.path.abspath(binary_path),
+            arch=args.arch,
+            budget_band=args.reveng_budget,
+            output_dir=args.output_dir,
+            project_name=os.path.basename(binary_path),
+        )
+        result = asyncio.run(pipeline.arun())
+
+        cli.console.print("\n[bold]Reveng pipeline complete[/bold]")
+        cli.console.print(f"  Binary: {result.binary_path}")
+        cli.console.print(f"  Status: {result.status}")
+        if result.decompilation:
+            cli.console.print(
+                f"  Functions decompiled: {result.decompilation.total_functions}"
+            )
+        if result.reconstruction:
+            cli.console.print(
+                f"  Functions reconstructed: {result.reconstruction.reconstructed_count}"
+            )
+            cli.console.print(
+                f"  Coverage: {result.reconstruction.validation.function_coverage:.0%}"
+            )
+        cli.console.print(f"  Findings: {len(result.findings)}")
+        exploited = sum(1 for r in result.exploit_results if r.success)
+        cli.console.print(f"  Exploits attempted: {len(result.exploit_results)}")
+        cli.console.print(f"  Exploited: {exploited}")
+        cli.console.print(f"  Cost: ${result.total_cost_usd:.2f}")
+        cli.console.print(f"  Duration: {result.duration_seconds:.1f}s")
+
+        for f in result.findings[:5]:
+            sev = (f.get("severity_verified") or f.get("severity", "info")).upper()
+            desc = f.get("description", "")[:80]
+            cli.console.print(f"  [{sev}] {desc}")
 
         sys.exit(0)
 
