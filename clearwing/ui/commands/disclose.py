@@ -18,6 +18,9 @@ from datetime import datetime, timezone
 
 from rich.table import Table
 
+from clearwing.core.event_payloads import DisclosureUpdatePayload
+from clearwing.core.events import EventBus
+
 
 def add_parser(subparsers):
     parser = subparsers.add_parser(
@@ -174,6 +177,10 @@ def _handle_validate(cli, args, db, workflow):
             from clearwing.sourcehunt.state import DisclosureState
             db.transition(args.finding_id, DisclosureState.IN_REVIEW, args.reviewer, "auto-claim for validate")
         workflow.validate(args.finding_id, args.reviewer, args.notes)
+        EventBus().emit_disclosure_update(DisclosureUpdatePayload(
+            finding_id=args.finding_id, action="validated",
+            reviewer=args.reviewer, days_remaining=None, detail=args.notes or "",
+        ))
         cli.console.print(f"[green]Finding {args.finding_id} validated.[/green]")
     except ValueError as e:
         cli.console.print(f"[red]{e}[/red]")
@@ -186,6 +193,10 @@ def _handle_reject(cli, args, db, workflow):
             cli.console.print(f"[red]Finding {args.finding_id} not found.[/red]")
             return
         workflow.reject(args.finding_id, args.reviewer, args.reason)
+        EventBus().emit_disclosure_update(DisclosureUpdatePayload(
+            finding_id=args.finding_id, action="rejected",
+            reviewer=args.reviewer, days_remaining=None, detail=args.reason,
+        ))
         cli.console.print(f"[green]Finding {args.finding_id} rejected.[/green]")
     except ValueError as e:
         cli.console.print(f"[red]{e}[/red]")
@@ -206,6 +217,11 @@ def _handle_send(cli, args, db, workflow):
             reporter_affiliation=args.reporter_affiliation,
             reporter_email=args.reporter_email,
         )
+        EventBus().emit_disclosure_update(DisclosureUpdatePayload(
+            finding_id=args.finding_id, action="sent",
+            reviewer=args.reviewer, days_remaining=90,
+            detail="CVD 90-day timeline started",
+        ))
         cli.console.print(f"[green]Disclosure sent for {args.finding_id}. 90-day CVD clock started.[/green]")
         for fmt, body in templates.items():
             cli.console.print(f"\n[bold]--- {fmt.upper()} Template ---[/bold]")

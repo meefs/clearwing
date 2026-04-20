@@ -195,6 +195,76 @@ def create_app():
 
         return {"session_id": session_id, "status": "running"}
 
+    # ---------------------------------------------------------------
+    # Disclosure REST endpoints
+    # ---------------------------------------------------------------
+
+    @app.get("/api/disclosure/queue")
+    async def disclosure_queue(state: str | None = None, repo: str | None = None):
+        from clearwing.sourcehunt.disclosure_db import DisclosureDB
+        db = DisclosureDB()
+        try:
+            return db.get_queue(state=state, repo_url=repo)
+        finally:
+            db.close()
+
+    @app.post("/api/disclosure/{finding_id}/validate")
+    async def disclosure_validate(finding_id: str, body: dict):
+        from clearwing.sourcehunt.disclosure_db import DisclosureDB
+        from clearwing.sourcehunt.disclosure_workflow import DisclosureWorkflow
+        db = DisclosureDB()
+        try:
+            wf = DisclosureWorkflow(db)
+            reviewer = body.get("reviewer", "web")
+            notes = body.get("notes", "")
+            wf.validate(finding_id, reviewer, notes)
+            return {"status": "validated", "finding_id": finding_id}
+        finally:
+            db.close()
+
+    @app.post("/api/disclosure/{finding_id}/reject")
+    async def disclosure_reject(finding_id: str, body: dict):
+        from clearwing.sourcehunt.disclosure_db import DisclosureDB
+        from clearwing.sourcehunt.disclosure_workflow import DisclosureWorkflow
+        db = DisclosureDB()
+        try:
+            wf = DisclosureWorkflow(db)
+            reviewer = body.get("reviewer", "web")
+            reason = body.get("reason", "")
+            wf.reject(finding_id, reviewer, reason)
+            return {"status": "rejected", "finding_id": finding_id}
+        finally:
+            db.close()
+
+    @app.post("/api/disclosure/{finding_id}/send")
+    async def disclosure_send(finding_id: str, body: dict):
+        from clearwing.sourcehunt.disclosure_db import DisclosureDB
+        from clearwing.sourcehunt.disclosure_workflow import DisclosureWorkflow
+        db = DisclosureDB()
+        try:
+            wf = DisclosureWorkflow(db)
+            templates = wf.send_disclosure(
+                finding_id,
+                reviewer=body.get("reviewer", "web"),
+                reporter_name=body.get("reporter_name", "(your name)"),
+                reporter_affiliation=body.get("reporter_affiliation", "(your affiliation)"),
+                reporter_email=body.get("reporter_email", "(your email)"),
+            )
+            return {"status": "sent", "finding_id": finding_id, "templates": list(templates.keys())}
+        finally:
+            db.close()
+
+    @app.get("/api/disclosure/status")
+    async def disclosure_status():
+        from clearwing.sourcehunt.disclosure_db import DisclosureDB
+        from clearwing.sourcehunt.disclosure_workflow import DisclosureWorkflow
+        db = DisclosureDB()
+        try:
+            wf = DisclosureWorkflow(db)
+            return wf.get_dashboard()
+        finally:
+            db.close()
+
     @app.get("/api/operate/{session_id}")
     async def get_operator_status(session_id: str):
         """Get the status of an operator session."""
@@ -234,15 +304,15 @@ def create_app():
             def on_event(event_type_name: str):
                 def handler(data):
                     try:
+                        if isinstance(data, dict | list | str | int | float | bool | type(None)):
+                            serializable = data
+                        elif hasattr(data, "__dataclass_fields__"):
+                            from dataclasses import asdict
+                            serializable = asdict(data)
+                        else:
+                            serializable = str(data)
                         message_queue.put_nowait(
-                            {
-                                "type": event_type_name,
-                                "data": data
-                                if isinstance(
-                                    data, dict | list | str | int | float | bool | type(None)
-                                )
-                                else str(data),
-                            }
+                            {"type": event_type_name, "data": serializable}
                         )
                     except Exception:
                         logger.debug("Failed to enqueue event", exc_info=True)
@@ -258,6 +328,13 @@ def create_app():
                 EventType.COST_UPDATE: "cost_update",
                 EventType.ERROR: "error",
                 EventType.APPROVAL_NEEDED: "approval_needed",
+                EventType.CAMPAIGN_PROGRESS: "campaign_progress",
+                EventType.SOURCEHUNT_STAGE: "sourcehunt_stage",
+                EventType.HUNT_PROGRESS: "hunt_progress",
+                EventType.VALIDATION_RESULT: "validation_result",
+                EventType.DISCLOSURE_UPDATE: "disclosure_update",
+                EventType.BENCHMARK_PROGRESS: "benchmark_progress",
+                EventType.EVAL_PROGRESS: "eval_progress",
             }
             for et, name in event_map.items():
                 h = on_event(name)

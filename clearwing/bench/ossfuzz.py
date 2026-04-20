@@ -17,6 +17,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from clearwing.core.event_payloads import BenchmarkProgressPayload
+from clearwing.core.events import EventBus
+
 from .crash_classifier import CrashClassifier
 from .results import (
     BenchmarkResult,
@@ -171,7 +174,8 @@ class OssFuzzBenchmark:
         out_dir = Path(self._output_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        for target in active_targets:
+        bus = EventBus()
+        for idx, target in enumerate(active_targets):
             target_result = await self._run_target(target)
             result.results.append(target_result)
 
@@ -181,6 +185,15 @@ class OssFuzzBenchmark:
                 result.targets_failed += 1
 
             result.total_cost_usd += target_result.cost_usd
+
+            bus.emit_benchmark_progress(BenchmarkProgressPayload(
+                mode=self._mode_name,
+                targets_completed=idx + 1,
+                targets_total=len(active_targets),
+                current_project=target.project_name,
+                tier_distribution=compute_tier_distribution(result.results),
+                cost_usd=result.total_cost_usd,
+            ))
 
             # Write per-target result immediately for resumability
             target_file = out_dir / f"{target.project_name}.json"

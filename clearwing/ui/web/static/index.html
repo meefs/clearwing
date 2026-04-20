@@ -62,6 +62,17 @@
   footer { background: var(--surface); border-top: 1px solid var(--border);
            padding: 6px 20px; font-size: 11px; color: var(--dim);
            display: flex; gap: 20px; }
+
+  #ops-panel { display: none; background: var(--surface);
+               border-bottom: 1px solid var(--border); padding: 8px 20px;
+               font-size: 12px; color: var(--dim); }
+  #ops-panel.active { display: block; }
+  #ops-panel .op-line { margin: 2px 0; font-family: monospace; }
+  #ops-panel .op-label { color: var(--accent); font-weight: 600; }
+  .msg.validation { background: #1a1e24; border-left: 3px solid var(--purple);
+                    font-size: 12px; }
+  .msg.progress { background: #1a1e24; border-left: 3px solid var(--green);
+                  font-size: 12px; color: var(--dim); }
 </style>
 </head>
 <body>
@@ -85,6 +96,8 @@
   <button onclick="startSession()">Connect</button>
 </div>
 
+<div id="ops-panel"></div>
+
 <div id="chat">
   <div id="messages"></div>
   <div id="input-bar">
@@ -102,6 +115,46 @@
 <script>
 const THINK_RE = /<think>[\s\S]*?<\/think>\s*/g;
 let ws = null;
+const opsState = {};
+
+function updateOpsPanel() {
+  const panel = document.getElementById('ops-panel');
+  const lines = [];
+  if (opsState.campaign) {
+    const c = opsState.campaign;
+    lines.push(`Campaign "${c.campaign_name || '?'}" \u2500 ${c.projects_completed||0}/${c.projects_total||0} projects \u2500 $${(c.cost_usd||0).toFixed(2)} \u2500 ${c.findings_total||0} findings (${c.verified_total||0} verified) [${c.status||'?'}]`);
+  }
+  if (opsState.sourcehunt) {
+    const s = opsState.sourcehunt;
+    lines.push(`Sourcehunt [${s.stage||'?'}:${s.status||'?'}] \u2500 ${s.findings_so_far||0} findings \u2500 $${(s.cost_usd||0).toFixed(2)}` + (s.detail ? ` \u2500 ${s.detail}` : ''));
+  }
+  if (opsState.hunt) {
+    const h = opsState.hunt;
+    lines.push(`Hunt tier-${h.tier||'?'} band-${h.band||'?'} \u2500 ${h.files_completed||0}/${h.files_total||0} files \u2500 ${h.findings_this_tier||0} findings \u2500 $${(h.budget_remaining||0).toFixed(2)} remaining`);
+  }
+  if (opsState.benchmark) {
+    const b = opsState.benchmark;
+    const dist = b.tier_distribution || {};
+    const distStr = Object.entries(dist).filter(([,v])=>v).map(([k,v])=>`T${k}:${v}`).join(' ');
+    lines.push(`Benchmark "${b.mode||'?'}" \u2500 ${b.targets_completed||0}/${b.targets_total||0} targets \u2500 $${(b.cost_usd||0).toFixed(2)}` + (distStr ? ` \u2500 ${distStr}` : ''));
+  }
+  if (opsState.eval) {
+    const e = opsState.eval;
+    lines.push(`Eval "${e.config_name||'?'}" \u2500 run ${(e.run_index||0)+1}/${e.runs_total||0} \u2500 config ${(e.configs_completed||0)+1}/${e.configs_total||0} \u2500 [${e.status||'?'}] \u2500 $${(e.cost_usd||0).toFixed(2)}`);
+  }
+  if (lines.length) {
+    panel.textContent = '';
+    lines.forEach(line => {
+      const div = document.createElement('div');
+      div.className = 'op-line';
+      div.textContent = line;
+      panel.appendChild(div);
+    });
+    panel.classList.add('active');
+  } else {
+    panel.classList.remove('active');
+  }
+}
 
 function addMessage(text, cls) {
   const el = document.createElement('div');
@@ -205,6 +258,36 @@ function startSession() {
         break;
       case 'complete':
         addMessage('Agent completed.', 'tool');
+        break;
+      case 'campaign_progress':
+        opsState.campaign = data;
+        updateOpsPanel();
+        break;
+      case 'sourcehunt_stage':
+        opsState.sourcehunt = data;
+        updateOpsPanel();
+        break;
+      case 'hunt_progress':
+        opsState.hunt = data;
+        updateOpsPanel();
+        break;
+      case 'validation_result': {
+        const axes = data.axes || {};
+        const axStr = Object.entries(axes).map(([k,v])=>`${k}:${v?'pass':'fail'}`).join(' ');
+        const outcome = data.advance ? 'advanced' : 'rejected';
+        addMessage(`[VALIDATOR] ${data.finding_id||'?'}: ${axStr} \u2192 ${outcome} (severity=${data.severity||'n/a'})`, 'validation');
+        break;
+      }
+      case 'disclosure_update':
+        addMessage(`[DISCLOSURE] ${data.finding_id||'?'}: ${data.action||'update'}` + (data.detail ? ` \u2014 ${data.detail}` : ''), 'progress');
+        break;
+      case 'benchmark_progress':
+        opsState.benchmark = data;
+        updateOpsPanel();
+        break;
+      case 'eval_progress':
+        opsState.eval = data;
+        updateOpsPanel();
         break;
     }
   };

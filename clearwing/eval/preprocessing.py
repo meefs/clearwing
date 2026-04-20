@@ -18,6 +18,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from clearwing.core.event_payloads import EvalProgressPayload
+from clearwing.core.events import EventBus
+
 from .metrics import (
     ConfigResult,
     ConfigRunResult,
@@ -138,7 +141,8 @@ class PreprocessingEval:
 
         local_path = self._prepare_repo()
 
-        for config_name in self._configs:
+        bus = EventBus()
+        for config_idx, config_name in enumerate(self._configs):
             eval_config = resolve_config(config_name)
             config_result = ConfigResult(config_name=config_name)
 
@@ -167,14 +171,33 @@ class PreprocessingEval:
                             "Loaded cached run %d for %s",
                             run_idx, config_name,
                         )
+                        bus.emit_eval_progress(EvalProgressPayload(
+                            project=self._project, config_name=config_name,
+                            run_index=run_idx, runs_total=self._runs,
+                            configs_completed=config_idx, configs_total=len(self._configs),
+                            status="cached", cost_usd=0.0,
+                        ))
                         continue
                     except Exception:
                         pass
 
+                bus.emit_eval_progress(EvalProgressPayload(
+                    project=self._project, config_name=config_name,
+                    run_index=run_idx, runs_total=self._runs,
+                    configs_completed=config_idx, configs_total=len(self._configs),
+                    status="running", cost_usd=0.0,
+                ))
                 run_result = await self._single_run(
                     eval_config, local_path, run_idx,
                 )
                 config_result.runs.append(run_result)
+                bus.emit_eval_progress(EvalProgressPayload(
+                    project=self._project, config_name=config_name,
+                    run_index=run_idx, runs_total=self._runs,
+                    configs_completed=config_idx, configs_total=len(self._configs),
+                    status="error" if run_result.error else "completed",
+                    cost_usd=run_result.metrics.cost_usd if run_result.metrics and not run_result.error else 0.0,
+                ))
 
                 try:
                     from dataclasses import asdict

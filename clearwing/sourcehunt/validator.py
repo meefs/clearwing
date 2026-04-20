@@ -16,6 +16,8 @@ import re
 from itertools import islice
 from typing import Any, cast
 
+from clearwing.core.event_payloads import ValidationResultPayload
+from clearwing.core.events import EventBus
 from clearwing.llm import AsyncLLMClient
 
 from .state import (
@@ -182,7 +184,17 @@ class Validator:
             logger.warning("Validator LLM call failed", exc_info=True)
             return self._error_verdict(finding, f"validator error: {e}")
 
-        return self._parse_response(finding, content)
+        verdict = self._parse_response(finding, content)
+
+        EventBus().emit_validation_result(ValidationResultPayload(
+            finding_id=verdict.finding_id,
+            axes={name: ar.passed for name, ar in verdict.axes.items()},
+            advance=verdict.advance,
+            severity=verdict.severity_validated,
+            evidence_level=verdict.evidence_level,
+        ))
+
+        return verdict
 
     def _build_user_message(self, finding: Finding, file_content: str) -> str:
         finding_view = {

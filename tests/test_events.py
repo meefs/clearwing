@@ -23,6 +23,13 @@ class TestEventType:
             "ERROR",
             "USER_INPUT",
             "USER_COMMAND",
+            "CAMPAIGN_PROGRESS",
+            "SOURCEHUNT_STAGE",
+            "HUNT_PROGRESS",
+            "VALIDATION_RESULT",
+            "DISCLOSURE_UPDATE",
+            "BENCHMARK_PROGRESS",
+            "EVAL_PROGRESS",
         }
         actual = {e.name for e in EventType}
         assert expected == actual

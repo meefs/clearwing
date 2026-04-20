@@ -24,6 +24,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
+from clearwing.core.event_payloads import HuntProgressPayload
+from clearwing.core.events import EventBus
 from clearwing.runners.parallel.executor import (
     TargetResult,
 )
@@ -458,6 +460,20 @@ class HunterPool:
                     self._spent_per_band[wi.band] = self._spent_per_band.get(wi.band, 0.0) + result.cost_usd
                     self._runs_per_band[wi.band] = self._runs_per_band.get(wi.band, 0) + 1
                     spent += result.cost_usd
+
+                completed_count = sum(1 for r in self._results.values() if r.status in ("completed", "error", "timeout"))
+                total_files = len(self.config.files)
+                findings_count = sum(len(r.findings) for r in self._results.values() if r.status == "completed")
+                EventBus().emit_hunt_progress(HuntProgressPayload(
+                    session_id=self.config.session_id_prefix,
+                    tier=tier,
+                    band=wi.band,
+                    files_completed=completed_count,
+                    files_total=total_files,
+                    findings_this_tier=findings_count,
+                    cost_usd=spent,
+                    budget_remaining=max(0.0, budget - spent),
+                ))
 
                 if result.status == "completed" and self.config.findings_pool is not None:
                     for f in cast(list[Finding], result.findings):

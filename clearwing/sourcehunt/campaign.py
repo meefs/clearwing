@@ -18,6 +18,9 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from clearwing.core.event_payloads import CampaignProgressPayload
+from clearwing.core.events import EventBus
+
 from .campaign_config import CampaignConfig, CampaignTargetConfig
 
 logger = logging.getLogger(__name__)
@@ -176,6 +179,25 @@ class CampaignRunner:
         for target in config.targets:
             self._project_states[target.repo] = ProjectState(repo=target.repo)
 
+    def _emit_progress(
+        self, current_project: str = "", status: str = "running",
+    ) -> None:
+        total_findings = sum(ps.findings_count for ps in self._project_states.values())
+        total_verified = sum(ps.verified_count for ps in self._project_states.values())
+        projects_completed = sum(
+            1 for ps in self._project_states.values() if ps.status == "completed"
+        )
+        EventBus().emit_campaign_progress(CampaignProgressPayload(
+            campaign_name=self.config.name,
+            projects_completed=projects_completed,
+            projects_total=len(self.config.targets),
+            current_project=current_project,
+            status=status,
+            cost_usd=self._budget_spent,
+            findings_total=total_findings,
+            verified_total=total_verified,
+        ))
+
     async def arun(self) -> CampaignResult:
         """Run the full campaign."""
         self._start_time = time.time()
@@ -232,6 +254,7 @@ class CampaignRunner:
 
             stopping_reason = self._check_stopping_rules()
             if stopping_reason:
+                self._emit_progress(status="stopped")
                 logger.info(
                     "Campaign stopping: %s", stopping_reason,
                 )
@@ -291,6 +314,7 @@ class CampaignRunner:
                 pass
 
         status = stopping_reason or "completed"
+        self._emit_progress(status=status)
 
         return CampaignResult(
             campaign_name=self.config.name,
@@ -325,6 +349,7 @@ class CampaignRunner:
             ps.status = "running"
             ps.start_time = time.time()
             ps.session_id = f"{self._session_id}-{_safe_name(target.repo)}"
+            self._emit_progress(current_project=target.repo)
 
             project_budget = target.budget
             if project_budget <= 0:
@@ -371,6 +396,7 @@ class CampaignRunner:
                 ps.verified_count = len(result.verified_findings)
                 ps.status = "completed"
                 ps.end_time = time.time()
+                self._emit_progress(current_project=target.repo)
 
                 return result
 
@@ -401,6 +427,7 @@ class CampaignRunner:
                 logger.info("Campaign resumed — PAUSE file removed")
 
             self._save_checkpoint()
+            self._emit_progress(status="paused" if not self._pause_event.is_set() else "running")
 
     def _save_checkpoint(self) -> None:
         pool_path = str(self._checkpoint_dir / "findings_pool.jsonl")

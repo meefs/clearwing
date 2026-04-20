@@ -20,6 +20,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from clearwing.core.event_payloads import SourcehuntStagePayload
+from clearwing.core.events import EventBus
 from clearwing.llm.native import AsyncLLMClient
 from clearwing.providers import (
     ENV_ANTHROPIC_KEY,
@@ -483,6 +485,20 @@ class SourceHuntRunner:
 
     # --- Public API ---------------------------------------------------------
 
+    def _emit_stage(
+        self, stage: str, status: str, findings_so_far: int = 0,
+        cost_usd: float = 0.0, detail: str = "",
+    ) -> None:
+        EventBus().emit_sourcehunt_stage(SourcehuntStagePayload(
+            session_id=self._session_id,
+            repo=self.repo_url,
+            stage=stage,
+            status=status,
+            findings_so_far=findings_so_far,
+            cost_usd=cost_usd,
+            detail=detail,
+        ))
+
     def run(self) -> SourceHuntResult:
         return asyncio.run(self.arun())
 
@@ -493,15 +509,18 @@ class SourceHuntRunner:
         logger.info("Sourcehunt session %s starting on %s", self._session_id, self.repo_url)
         try:
             # 1. Preprocess
+            self._emit_stage("preprocess", "started")
             preprocess_result = self._preprocess()
             repo_path = preprocess_result.repo_path
             files = preprocess_result.file_targets
             files_ranked = len(files)
             logger.info("Preprocessor enumerated %d files", files_ranked)
+            self._emit_stage("preprocess", "completed", detail=f"Enumerated {files_ranked} files")
             self._ensure_sandbox_factory(repo_path, files)
 
             # 2. Rank — unless depth=quick AND no LLM available
             ranker_llm = self._get_native_client("ranker", self.ranker_llm)
+            self._emit_stage("rank", "started", detail=f"{len(files)} files")
             if ranker_llm is not None and files:
                 logger.info("Ranker starting on %d files", len(files))
                 try:
@@ -520,12 +539,14 @@ class SourceHuntRunner:
                     await Ranker(ranker_llm, ranker_config).arank(files)
                     logger.info("Ranker completed")
                     pipeline_status.record_succeeded("ranker")
+                    self._emit_stage("rank", "completed", detail=f"Ranked {len(files)} files")
                 except Exception:
                     logger.warning("Ranker failed", exc_info=True)
                     pipeline_status.record_degraded(
                         "ranker",
                         "All files assigned default priority scores (surface=3, influence=2)",
                     )
+                    self._emit_stage("rank", "degraded", detail="Default priority scores used")
             else:
                 logger.info("Ranker skipped; no LLM available")
                 pipeline_status.record_degraded(
@@ -679,6 +700,7 @@ class SourceHuntRunner:
             if self._no_per_file_hunt:
                 logger.info("Per-file hunt skipped (--no-per-file-hunt)")
             elif hunter_llm is not None and files:
+                self._emit_stage("hunt", "started", detail=f"{len(files)} files")
                 logger.info("HunterPool starting on %d files", len(files))
                 pool = HunterPool(
                     HuntPoolConfig(
@@ -711,6 +733,10 @@ class SourceHuntRunner:
                     all_findings = await pool.arun()
                     logger.info("HunterPool completed with %d findings", len(all_findings))
                     pipeline_status.record_succeeded("hunter_pool")
+                    self._emit_stage(
+                        "hunt", "completed", findings_so_far=len(all_findings),
+                        cost_usd=pool.total_spent, detail=f"{len(all_findings)} findings",
+                    )
                 except Exception:
                     logger.warning("HunterPool run failed", exc_info=True)
                     pipeline_status.record_degraded(
@@ -844,6 +870,10 @@ class SourceHuntRunner:
             # 4. Verify (unless --no-verify)
             verified: list[Finding] = []
             rejected: list[Finding] = []
+            self._emit_stage(
+                "verify", "started", findings_so_far=len(all_findings),
+                detail=f"{len(all_findings)} findings to verify",
+            )
             if not self.no_verify:
                 verifier_llm = self._get_native_client("verifier", self.verifier_llm)
                 if verifier_llm is not None:
@@ -870,6 +900,10 @@ class SourceHuntRunner:
                     fallback_description="Verification skipped (--no-verify)",
                 )
 
+            self._emit_stage(
+                "verify", "completed", findings_so_far=len(all_findings),
+                detail=f"{len(verified)} verified, {len(rejected)} rejected",
+            )
             if rejected:
                 self._write_rejected_findings(rejected)
 
@@ -995,6 +1029,7 @@ class SourceHuntRunner:
                 verified = stable_verified + non_poc
 
             # 5. Exploit-triage (unless --no-exploit) — gated on evidence_level
+            self._emit_stage("exploit", "started", findings_so_far=len(all_findings))
             exploited: list[Finding] = []
             # 5.5 v0.3: Auto-patch (opt-in) — runs after exploiter on verified
             #          critical/high findings with root_cause_explained evidence.
@@ -1199,7 +1234,13 @@ class SourceHuntRunner:
             except Exception:
                 logger.warning("Auto-commitment failed", exc_info=True)
 
+            self._emit_stage(
+                "exploit", "completed", findings_so_far=len(all_findings),
+                detail=f"{len(exploited)} exploited",
+            )
+
             # 6. Report
+            self._emit_stage("report", "started", findings_so_far=len(all_findings))
             _pool_stats = findings_pool.pool_stats() if findings_pool is not None else None
             _subsystem_stats = (
                 {"subsystems_hunted": subsystems_hunted, "subsystem_spent_usd": subsystem_spent}
@@ -1213,6 +1254,11 @@ class SourceHuntRunner:
                 pool_stats=_pool_stats,
                 subsystem_stats=_subsystem_stats,
                 pipeline_status=pipeline_status,
+            )
+
+            self._emit_stage(
+                "report", "completed", findings_so_far=len(all_findings),
+                cost_usd=sum(spent_per_tier.values()) + subsystem_spent,
             )
 
             duration = time.monotonic() - start_time

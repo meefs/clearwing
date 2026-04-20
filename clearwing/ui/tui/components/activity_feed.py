@@ -36,6 +36,19 @@ class ActivityFeed(RichLog):
         rendered = render_tool_result(tool_name, data)
         self.write(rendered)
 
+    def add_validation(self, payload: dict) -> None:
+        """Add a compact 4-axis validation summary."""
+        fid = payload.get("finding_id", "?")
+        axes = payload.get("axes", {})
+        parts = [f"{ax}:{'pass' if v else 'fail'}" for ax, v in axes.items()]
+        axes_str = " ".join(parts) if parts else "no axes"
+        outcome = "advanced" if payload.get("advance") else "rejected"
+        sev = payload.get("severity") or "n/a"
+        self.write(Text(
+            f"[VALIDATOR] {fid}: {axes_str} \u2192 {outcome} (severity={sev})",
+            style="bold cyan" if payload.get("advance") else "dim yellow",
+        ))
+
     def add_flag(self, flag: str, context: str) -> None:
         """Add a prominent flag-found banner to the feed."""
         panel = Panel(

@@ -13,6 +13,7 @@ from clearwing.core.events import EventBus, EventType
 
 from .components.activity_feed import ActivityFeed
 from .components.input_bar import InputBar
+from .components.progress_panel import ProgressPanel
 from .components.status_bar import StatusBar
 from .screens.help_screen import HelpScreen
 from .screens.quit_screen import QuitScreen
@@ -27,7 +28,7 @@ class ClearwingApp(App):
     Screen {
         layout: grid;
         grid-size: 1;
-        grid-rows: auto 1fr auto auto;
+        grid-rows: auto 1fr auto auto auto;
     }
     ActivityFeed {
         height: 1fr;
@@ -73,6 +74,7 @@ class ClearwingApp(App):
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         yield ActivityFeed()
+        yield ProgressPanel()
         yield StatusBar(target=self.target, session_id=self.session_id)
         yield InputBar()
         yield Footer()
@@ -109,6 +111,13 @@ class ClearwingApp(App):
         bus.subscribe(EventType.COST_UPDATE, self._on_bus_cost_update)
         bus.subscribe(EventType.ERROR, self._on_bus_error)
         bus.subscribe(EventType.APPROVAL_NEEDED, self._on_bus_approval_needed)
+        bus.subscribe(EventType.CAMPAIGN_PROGRESS, self._on_bus_campaign_progress)
+        bus.subscribe(EventType.SOURCEHUNT_STAGE, self._on_bus_sourcehunt_stage)
+        bus.subscribe(EventType.HUNT_PROGRESS, self._on_bus_hunt_progress)
+        bus.subscribe(EventType.VALIDATION_RESULT, self._on_bus_validation_result)
+        bus.subscribe(EventType.DISCLOSURE_UPDATE, self._on_bus_disclosure_update)
+        bus.subscribe(EventType.BENCHMARK_PROGRESS, self._on_bus_benchmark_progress)
+        bus.subscribe(EventType.EVAL_PROGRESS, self._on_bus_eval_progress)
 
     def on_unmount(self) -> None:
         """Unsubscribe from EventBus before the app tears down."""
@@ -121,6 +130,13 @@ class ClearwingApp(App):
         bus.unsubscribe(EventType.COST_UPDATE, self._on_bus_cost_update)
         bus.unsubscribe(EventType.ERROR, self._on_bus_error)
         bus.unsubscribe(EventType.APPROVAL_NEEDED, self._on_bus_approval_needed)
+        bus.unsubscribe(EventType.CAMPAIGN_PROGRESS, self._on_bus_campaign_progress)
+        bus.unsubscribe(EventType.SOURCEHUNT_STAGE, self._on_bus_sourcehunt_stage)
+        bus.unsubscribe(EventType.HUNT_PROGRESS, self._on_bus_hunt_progress)
+        bus.unsubscribe(EventType.VALIDATION_RESULT, self._on_bus_validation_result)
+        bus.unsubscribe(EventType.DISCLOSURE_UPDATE, self._on_bus_disclosure_update)
+        bus.unsubscribe(EventType.BENCHMARK_PROGRESS, self._on_bus_benchmark_progress)
+        bus.unsubscribe(EventType.EVAL_PROGRESS, self._on_bus_eval_progress)
 
     # ------------------------------------------------------------------
     # Event handlers — bridge from background threads into the TUI
@@ -154,6 +170,27 @@ class ClearwingApp(App):
 
     def _on_bus_approval_needed(self, data):
         self._safe_call_from_thread(self._handle_approval, data)
+
+    def _on_bus_campaign_progress(self, data):
+        self._safe_call_from_thread(self._handle_campaign_progress, data)
+
+    def _on_bus_sourcehunt_stage(self, data):
+        self._safe_call_from_thread(self._handle_sourcehunt_stage, data)
+
+    def _on_bus_hunt_progress(self, data):
+        self._safe_call_from_thread(self._handle_hunt_progress, data)
+
+    def _on_bus_validation_result(self, data):
+        self._safe_call_from_thread(self._handle_validation_result, data)
+
+    def _on_bus_disclosure_update(self, data):
+        self._safe_call_from_thread(self._handle_disclosure_update, data)
+
+    def _on_bus_benchmark_progress(self, data):
+        self._safe_call_from_thread(self._handle_benchmark_progress, data)
+
+    def _on_bus_eval_progress(self, data):
+        self._safe_call_from_thread(self._handle_eval_progress, data)
 
     # ------------------------------------------------------------------
     # Actual UI update methods (run on the Textual event loop thread)
@@ -195,6 +232,44 @@ class ClearwingApp(App):
         feed = self.query_one(ActivityFeed)
         prompt = data.get("prompt", str(data)) if isinstance(data, dict) else str(data)
         feed.add_message(f"APPROVAL NEEDED: {prompt}", "warning")
+
+    def _payload_dict(self, data) -> dict:
+        if isinstance(data, dict):
+            return data
+        try:
+            from dataclasses import asdict
+            return asdict(data)
+        except Exception:
+            return {}
+
+    def _handle_campaign_progress(self, data):
+        self.query_one(ProgressPanel).update_campaign(data)
+
+    def _handle_sourcehunt_stage(self, data):
+        self.query_one(ProgressPanel).update_sourcehunt(data)
+
+    def _handle_hunt_progress(self, data):
+        self.query_one(ProgressPanel).update_hunt(data)
+
+    def _handle_validation_result(self, data):
+        d = self._payload_dict(data)
+        self.query_one(ActivityFeed).add_validation(d)
+
+    def _handle_disclosure_update(self, data):
+        d = self._payload_dict(data)
+        action = d.get("action", "update")
+        fid = d.get("finding_id", "?")
+        detail = d.get("detail", "")
+        self.query_one(ActivityFeed).add_message(
+            f"[DISCLOSURE] {fid}: {action}" + (f" — {detail}" if detail else ""),
+            "warning",
+        )
+
+    def _handle_benchmark_progress(self, data):
+        self.query_one(ProgressPanel).update_benchmark(data)
+
+    def _handle_eval_progress(self, data):
+        self.query_one(ProgressPanel).update_eval(data)
 
     # ------------------------------------------------------------------
     # Agent loop — runs as a Textual worker in the background
