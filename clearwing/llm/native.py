@@ -49,14 +49,14 @@ def strip_think_tags(text: str) -> str:
 def response_text(response: ChatResponse) -> str:
     """Coalesce a :class:`ChatResponse`'s text segments into a single string.
 
-    Any ``<think>...</think>`` blocks are stripped so that downstream
-    JSON parsing and display are not polluted by chain-of-thought.
+    Prefers ``first_text()`` when it is non-empty; falls back to joining
+    every non-empty segment in ``texts()``. Returns ``""`` when the
+    response carries no text at all (e.g. a pure tool-call response).
     """
     first = response.first_text()
     if first:
-        return strip_think_tags(first)
-    joined = "\n".join(segment for segment in response.texts() if segment)
-    return strip_think_tags(joined)
+        return first
+    return "\n".join(segment for segment in response.texts() if segment)
 
 
 def _is_root_model_type(schema_model: type[BaseModel]) -> bool:
@@ -234,7 +234,7 @@ class AsyncLLMClient:
             response_schema_name=schema_name,
             response_schema_description=schema_description,
         )
-        text = response_text(response)
+        text = strip_think_tags(response_text(response))
         if schema_model is not None:
             parsed_model = _validate_schema_response(schema_model, text)
             if _is_root_model_type(schema_model):
