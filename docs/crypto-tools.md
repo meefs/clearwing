@@ -709,5 +709,61 @@ Attack methodology playbooks in `clearwing/core/skills/crypto/`. Loaded via
 | Padding Oracle | `padding_oracle.md` | CBC mode padding oracle, Vaudenay byte-at-a-time decryption methodology |
 | TLS Assessment | `tls_assessment.md` | Protocol downgrade (POODLE, BEAST), weak ciphers, certificate validation |
 
+| CVE Research | `cve_research.md` | Local CVE database search, product/protocol/CWE queries, cross-referencing with knowledge graph |
+
 Each skill provides: attack theory, detection methodology, exploitation steps
 (with specific tool invocations), validation criteria, and known mitigations.
+
+
+---
+
+## CVE Database (`data/cve_tools.py`)
+
+Three tools for maintaining and querying a local mirror of the NVD CVE List V5
+(346k+ CVEs). Uses SQLite with FTS5 for fast full-text search.
+
+### `cve_db_update`
+
+Download and index the CVE database.
+
+```python
+cve_db_update(
+    zip_path: str = "",  # path to local cvelistV5-main.zip; if empty, downloads from GitHub (~550 MB)
+) -> dict  # {"status": "success", "records": int, "db_path": str}
+```
+
+The database is stored at `~/.clearwing/cve/cve.db`. If `zip_path` is provided,
+uses the local file instead of downloading. Extracts all CVE JSON records,
+parses metadata (CVSS, CWE, affected products, descriptions), and builds an
+FTS5 index for full-text search.
+
+**No `interrupt()` when using local zip.** Downloads require approval.
+
+### `cve_search`
+
+Full-text search across the CVE database.
+
+```python
+cve_search(
+    query: str,              # FTS5 query: "SRP bypass", "1password OR agilebits"
+    min_cvss: float = 0.0,   # minimum CVSS score filter
+    max_results: int = 25,   # cap on returned results
+    date_after: str = "",    # only CVEs published after this date (YYYY-MM-DD)
+    cwe: str = "",           # filter by CWE ID (e.g. "CWE-287")
+) -> dict  # {"count": int, "total_matches": int, "results": [...]}
+```
+
+Results are sorted by CVSS score descending. Supports FTS5 syntax: `AND`, `OR`,
+`NOT`, `"exact phrase"`, `prefix*`.
+
+### `cve_lookup`
+
+Look up a specific CVE by ID.
+
+```python
+cve_lookup(
+    cve_id: str,  # e.g. "CVE-2022-32550"
+) -> dict  # full record: description, CVSS, CWE, affected products, dates
+```
+
+Returns the complete CVE record including parsed affected product list.

@@ -513,3 +513,139 @@ The main attack surface from source analysis:
 2. **All-encrypted API protocol** — makes server-side testing much harder than
    anticipated. We need the session key to even send valid requests
 3. **Burp plugin exists** — we should use this for any authenticated testing
+
+
+## Step 1.6 — CVE / Exploit Search
+
+**Date:** 2026-04-23
+
+**Source:** NVD CVE List V5 database (346,306 CVEs loaded into local SQLite),
+cross-referenced with agent-gathered research from Exploit-DB, academic papers,
+and security advisories.
+
+### 1Password-Specific CVEs (13 total)
+
+| CVE | CVSS | Product | Relevance |
+|-----|------|---------|-----------|
+| **CVE-2022-32550** | — | All 1Password apps | **SRP connection validation deviation** — server impersonation possible in specific circumstances. The only CVE targeting 1Password's SRP implementation. Patched. |
+| **CVE-2020-10256** | 9.8 | CLI/SCIM Bridge (beta) | **Insecure PRNG for encryption keys** — brute-forceable key generation. Beta-only, not main apps. Patched. |
+| **CVE-2024-42219** | 7.8 | 1Password 8 macOS | **XPC IPC validation bypass** — local attacker exfiltrates vault items + SRP-x via impersonating browser extension. Patched 8.10.36. |
+| **CVE-2024-42218** | 4.7 | 1Password 8 macOS | **Downgrade attack** — local attacker uses old app version to bypass macOS security. Patched 8.10.38. |
+| **CVE-2022-29868** | 5.5 | 1Password 7 macOS | **Process validation bypass** — local exfiltration of secrets including "derived values used for signing in." Patched 7.9.3. |
+| **CVE-2021-41795** | 6.5 | Safari extension | **Authorization bypass** — malicious web page reads fillable vault items silently. Patched 7.8.7. |
+| **CVE-2021-36758** | 5.4 | Connect server | **Privilege escalation** via improperly scoped access tokens. Patched 1.2. |
+| **CVE-2021-26905** | 6.5 | SCIM Bridge | **TLS private key disclosure** via log file access. Patched 1.6.2. |
+| **CVE-2020-18173** | 7.8 | 1Password 7 Windows | **DLL injection** — local arbitrary code execution. |
+| **CVE-2018-19863** | 5.5 | 1Password 7 macOS | **Credential logging** — Safari→1Password data logged locally. Patched. |
+| **CVE-2018-13042** | 5.9 | 1Password 6 Android | **DoS** via exported activities. Not relevant to web. |
+| **CVE-2014-3753** | 5.5 | 1Password Windows | **Security feature bypass.** Sparse details. |
+| **CVE-2012-6369** | 4.3 | 1Password 3 desktop | **XSS** in troubleshooting report. Ancient, irrelevant. |
+
+**Assessment:** No CVE has ever achieved remote vault content recovery against
+1Password. All high-severity CVEs require local access (macOS IPC bypass). The
+only SRP-related CVE (CVE-2022-32550) was a connection validation issue, not a
+cryptographic break. The insecure PRNG (CVE-2020-10256) only affected beta CLI
+tools.
+
+### SRP Protocol CVEs
+
+| CVE | CVSS | Description | Applies to 1Password? |
+|-----|------|-------------|----------------------|
+| **CVE-2009-4810** | 7.5 | Samhain SRP zero-value validation bypass (classic A=0) | **NO** — 1Password's library validates via `IsPublicValid()` |
+| **CVE-2025-54885** | 6.9 | Thinbus JS SRP: 252 bits entropy instead of 2048 (function vs value bug) | **NO** — different library, JS-specific bug |
+| **CVE-2026-3559** | 8.1 | Philips Hue: SRP static nonce, full auth bypass | **NO** — implementation bug, not protocol flaw |
+| **CVE-2021-4286** | 2.6 | pysrp: timing leak in `calculate_x` | **POSSIBLY** — same attack class (timing) is relevant |
+
+### SRP Academic Research
+
+| Paper | Year | Finding | Relevance |
+|-------|------|---------|-----------|
+| **PARASITE** (CCS 2021) | 2021 | OpenSSL `BN_mod_exp` non-constant-time path leaks password info via cache timing. Single-trace attack. | **HIGH** — if 1Password's server uses affected OpenSSL version. The Go SRP library uses Go's `math/big`, not OpenSSL. |
+| **Threat for SRP** (ACNS 2021) | 2021 | MitM can modify salt to derive new exponent, exploiting timing even with different client implementation | **MEDIUM** — requires MitM + timing vulnerability |
+| **Just How Secure is SRP?** (ePrint 2025) | 2025 | SRP is probably NOT UC-secure; existing proof uses non-standard model | **LOW** — theoretical; game-based security still holds |
+| **Small subgroup non-confinement** (Hao 2010) | 2010 | Information leakage from subgroup structure | **LOW** — mitigated by safe primes |
+
+### PBKDF2 CVEs
+
+| CVE | CVSS | Description | Relevance |
+|-----|------|-------------|-----------|
+| **CVE-2025-6545** | 9.1 | npm `pbkdf2` package: returns zero-filled buffers for non-normalized algorithm names | **CHECK** — if web client uses this polyfill instead of native WebCrypto |
+| **CVE-2025-6547** | 9.1 | Same `pbkdf2` package: improper validation | Same as above |
+| **CVE-2023-46233** | 9.1 | crypto-js: PBKDF2 defaults to SHA-1 with 1 iteration | **NO** — 1Password uses explicit SHA-256 + 100k+ iterations |
+| **CVE-2023-46133** | 9.1 | CryptoES: same weak default as crypto-js | **NO** — same reason |
+| **CVE-2025-11187** | — | OpenSSL PBMAC1: stack buffer overflow in PKCS#12 MAC verification | **NO** — different context (PKCS#12) |
+
+**Key observation:** 1Password uses 100,000 iterations of PBKDF2-HMAC-SHA256.
+OWASP's 2025 recommendation is 310,000–600,000. However, the 128-bit Secret Key
+makes brute force infeasible regardless of iteration count.
+
+### AES-GCM / Nonce CVEs
+
+| CVE | CVSS | Description | Relevance |
+|-----|------|-------------|-----------|
+| **CVE-2026-5446** | 6.0 | wolfSSL ARIA-GCM: reuses identical 12-byte nonce for every record | **PATTERN** — demonstrates catastrophic nonce reuse |
+| **CVE-2026-26014** | 5.9 | Pion DTLS: random nonce generation, birthday bound collision | **PATTERN** — random nonces hit collision at 2^32 messages |
+| **CVE-2021-32791** | 5.9 | mod_auth_openidc: static IV for AES-GCM | **PATTERN** — static nonce = keystream recovery |
+| **CVE-2025-61739** | 7.2 | Generic nonce reuse: replay attack or decryption | **PATTERN** |
+
+**Assessment:** No AES-GCM CVE directly affects 1Password. The nonce reuse
+pattern is the primary risk — must verify 1Password uses unique per-item nonces.
+Birthday bound (2^32 messages per key) is unlikely to be reached in vault usage.
+
+### WebCrypto CVEs
+
+| CVE | CVSS | Description | Relevance |
+|-----|------|-------------|-----------|
+| **CVE-2016-5142** | 9.8 | Chrome WebCrypto use-after-free — RCE | **HISTORICAL** — fixed Chrome 52 (2016) |
+| **CVE-2017-7822** | 5.3 | Firefox: AES-GCM accepts zero-length IV | **HISTORICAL** — fixed Firefox 56 (2017) |
+| **CVE-2022-35255** | — | Node.js: weak randomness in WebCrypto keygen | **NO** — browser, not Node.js |
+| **CVE-2018-5122** | — | Firefox: integer overflow in WebCrypto DoCrypt | **HISTORICAL** — fixed |
+
+**Assessment:** All WebCrypto CVEs are historical and patched in modern browsers.
+The browser's native crypto layer is the correct choice over JS polyfills.
+
+### Indirect / Dependency CVEs
+
+| CVE | CVSS | Description | Relevance |
+|-----|------|-------------|-----------|
+| **CVE-2023-4863** | 10.0 | libwebp heap buffer overflow (via Chromium/Electron) | 1Password patched in 8.10.15. RCE via crafted WebP image. |
+| **CVE-2025-55305** | — | Electron ASAR integrity bypass (Trail of Bits) | 1Password patched in 8.11.8-40. Local backdoor via V8 snapshot. |
+
+### Research Papers
+
+| Paper | Finding | Relevance |
+|-------|---------|-----------|
+| **ETH Zurich / USI** (USENIX Sec 2026) | 2 attack scenarios under malicious-server model achieve full vault compromise | **HIGH** — but 1Password says these are documented in their white paper. The 2SKD Secret Key provides protection competitors lack. |
+| **DOM-based extension clickjacking** (DEF CON 33, 2025) | Clickjacking attacks against browser extension autofill | **MEDIUM** — patched in extension 8.11.7. Not relevant to web vault. |
+
+### Summary Assessment
+
+1. **No remote vault content recovery has ever been demonstrated** against
+   1Password via any CVE or published research
+2. **SRP implementation is solid** — zero-key attacks properly mitigated,
+   connection validation CVE (2022-32550) is patched
+3. **PARASITE timing attack is the most credible SRP threat** — but requires
+   non-constant-time big number operations, and Go's `math/big` (used by the
+   SRP library) is not known to have the OpenSSL-specific vulnerability
+4. **PBKDF2 iteration count (100k) is below OWASP 2025 recommendation** but
+   irrelevant due to 128-bit Secret Key
+5. **npm `pbkdf2` polyfill (CVE-2025-6545) is high risk if used** — must verify
+   the web client uses native WebCrypto, not a polyfill
+6. **ETH Zurich malicious-server attacks** confirm that server compromise +
+   client code tampering can break vault confidentiality — aligns with the
+   white paper's acknowledged weaknesses (Appendix A.2, A.3, A.5)
+7. **No exploits on Exploit-DB** for 1Password
+8. **All high-severity CVEs required local access** (macOS IPC, DLL injection)
+
+### Actionable Items for Phase 2-3
+
+1. **Verify WebCrypto vs polyfill** — check if the web client's JS bundle
+   imports the npm `pbkdf2` package or uses `crypto.subtle.deriveBits()`. If
+   polyfill is used, CVE-2025-6545 could produce zero-derived keys.
+2. **Test SRP timing** — PARASITE-class timing attack against the production
+   server, even though the Go library is likely safe (Step 3.2)
+3. **Check AES-GCM nonce generation** — verify per-item unique nonces when
+   we reach vault encryption analysis (Step 3.7)
+4. **Investigate CVE-2022-32550 residual** — the SRP connection validation
+   deviation was patched, but understand exactly what deviated to look for
+   similar issues in the current implementation

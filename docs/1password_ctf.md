@@ -134,10 +134,13 @@ All tools referenced in the runbook below. Organized by attack domain.
 | `kali_setup` / `kali_execute` | `ops/kali_docker_tool` | Full Kali toolchain (hashcat, nmap, testssl.sh) |
 | `search_exploit_db` | `exploit/exploit_search` | Exploit-DB and NVD search |
 
-### 2.9 Knowledge & Reporting
+### 2.9 Knowledge, CVE Database & Reporting
 
 | Tool | Module | Purpose |
 |------|--------|---------|
+| `cve_db_update` | `data/cve_tools` | Download and index NVD CVE List V5 into local SQLite (346k+ CVEs) |
+| `cve_search` | `data/cve_tools` | Full-text search with CVSS, date, and CWE filters |
+| `cve_lookup` | `data/cve_tools` | Deep dive on a specific CVE ID |
 | `query_knowledge_graph` | `data/knowledge_tools` | Query the crypto-aware knowledge graph |
 | `store_knowledge` / `search_knowledge` | `data/memory_tools` | Persist and recall findings across sessions |
 | `generate_report` / `save_report` | `meta/reporting_tools` | Compile HackerOne submission |
@@ -264,14 +267,20 @@ missing point validation, key material in logs.
 #### Step 1.6 — CVE / Exploit Search
 
 ```
-search_cves(query="1Password")
-search_cves(query="SRP-6a")
-search_cves(query="PBKDF2 side channel")
+cve_db_update(zip_path="/path/to/cvelistV5-main.zip")
+cve_search(query="1password OR agilebits", max_results=25)
+cve_search(query="SRP authentication bypass", min_cvss=5.0)
+cve_search(query="PBKDF2 side channel OR timing", min_cvss=5.0)
+cve_search(query="AES-GCM nonce reuse", min_cvss=5.0)
+cve_search(query="WebCrypto", min_cvss=5.0)
 search_exploit_db(query="1password")
 ```
 
-Low probability of direct hits, but establishes baseline awareness of known
-weakness classes.
+The local CVE database (346k+ CVEs with FTS5 search) enables fast, comprehensive
+searches without rate limits. Use `cve_lookup(cve_id="CVE-XXXX-YYYY")` for deep
+dives on specific CVEs. Low probability of direct hits against 1Password, but
+establishes baseline awareness of known weakness classes in SRP, PBKDF2, and
+AES-GCM.
 
 
 ### Phase 2: Protocol Analysis
