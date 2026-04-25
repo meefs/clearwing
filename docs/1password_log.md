@@ -1798,3 +1798,383 @@ authentication handshake:
    auth token derivation has a weakness that allows joining without
    the QR code. This would require access to the WASM crypto modules
    that implement the Mycelium key exchange
+
+
+---
+
+## Phase 5: Playwright MITM & Deep Attack Surface Exploration
+
+### 5.1 Playwright MITM Setup
+
+Playwright's bundled Chromium was blocked by 1Password's browser version
+check ("Update your browser"). Bypassed by launching system Chrome:
+
+```python
+browser = pw.chromium.launch(channel="chrome", headless=True)
+# Chrome 147.0.7727.116 passes version check
+```
+
+Injected JavaScript hooks to intercept:
+- All `crypto.subtle` methods (deriveBits, importKey, sign, verify, digest, encrypt, decrypt)
+- All `window.fetch` calls (request/response bodies, headers)
+
+### 5.2 Full SRP Key Derivation Capture
+
+Captured the complete 2SKD key derivation chain for account
+`ctf@bugbounty-ctf.1password.com`:
+
+| Step | Operation | Parameters | Output |
+|------|-----------|-----------|--------|
+| 1 | importKey | Email as raw bytes → HKDF key | CryptoKey |
+| 2 | HKDF-SHA256 | salt=server_salt, info="SRPg-4096" | 32-byte personalized salt |
+| 3 | importKey | Password as raw bytes → PBKDF2 key | CryptoKey |
+| 4 | PBKDF2-HMAC-SHA256 | salt=personalized_salt, iterations=100000 | 32-byte password key |
+| 5 | importKey | SK raw material → HKDF key | CryptoKey |
+| 6 | HKDF-SHA256 | salt=SK_id, info=SK_format | 32-byte SK key |
+| 7 | XOR | password_key ⊕ SK_key | 32-byte combined key (SRP-x) |
+
+**Confirmed account parameters:**
+- Email: `ctf@bugbounty-ctf.1password.com`
+- Secret Key UUID: `92C843`
+- SRP group: `SRPg-4096`
+- PBKDF2 iterations: `100,000`
+- Server salt (base64url): `IBP--AuszT6YOicP5GFRXw`
+- Auth flow: POST `/api/v2/auth/methods` → POST `/api/v3/auth/start` → POST `/api/v2/auth`
+
+### 5.3 PBKDF2 Iteration Downgrade (MITM)
+
+Tested JS-level fetch interception to modify the `auth/start` response
+and reduce PBKDF2 iterations:
+
+| Injected Iterations | Client Behavior |
+|---------------------|----------------|
+| 1 | Rejected — client enforces minimum |
+| 100 | Rejected |
+| 1,000 | Rejected |
+| 10,000 | **Accepted** — client derives with 10K |
+| 50,000 | Accepted |
+| 99,999 | Accepted |
+
+**Finding:** Client-side minimum threshold is **10,000 iterations**. A MITM
+can achieve a 10x reduction from the server's 100K. This doesn't break
+authentication (still need correct password + SK), but weakens offline
+cracking resistance if key material is captured.
+
+### 5.4 SRP Group Downgrade
+
+Tested modifying `userAuth.method` in auth/start response:
+
+| Injected Method | Client Behavior |
+|-----------------|----------------|
+| `SRPg-2048` | Rejected — "Unknown SRP method" |
+| `SRPg-4096` | Accepted (baseline) |
+
+**Finding:** Client only accepts `SRPg-4096`. No downgrade possible.
+
+### 5.5 Account Enumeration via auth/start
+
+Tested auth/start with non-existent emails:
+
+| Email | Response | Salt | UUID |
+|-------|----------|------|------|
+| `ctf@bugbounty-ctf.1password.com` (real) | 200 | `IBP--AuszT6YOicP5GFRXw` | `92C843` |
+| `xxnotreal@bugbounty-ctf.1password.com` | 200 | Deterministic fake | Deterministic fake |
+| `a@b.c` | 200 | Deterministic fake | Deterministic fake |
+
+**Finding:** Server returns **deterministic fake parameters** for
+non-existent accounts. Same UUID and salt across multiple requests for
+the same email. This is better than random (which would be
+indistinguishable from real), but still leaks no usable information
+since the fake values are consistent.
+
+### 5.6 Recovery Code Analysis
+
+**Client-side format:** `1PRK` prefix + 52 characters from charset
+`23456789ABCDEFGHJKLMNPQRSTVWXYZ` (30 chars). Total: 56 characters.
+Raw key: 32 bytes (256 bits). UUID derived via
+`HKDF(SHA256, rawKey, info="1P_RECOVERY_KEY_UUID", len=16)`.
+
+**Validation:** Entirely client-side. The client validates:
+1. Length check (56 chars)
+2. `1PRK` prefix
+3. Base-32 roundtrip validation (charset check)
+4. **Zero API calls for invalid codes** — no server-side brute force possible
+
+Tested formats: too short, wrong prefix, no prefix, all-same-chars.
+All rejected client-side with no network traffic.
+
+### 5.7 Mycelium Pairing Protocol (Complete)
+
+Reverse-engineered the full Mycelium "sign in with another device" flow
+from JS bundles:
+
+**Channel types:** `u` (unencrypted) and `v` (encrypted)
+
+**Protocol flow (u-channel):**
+1. Page creates channel: `POST /api/v2/mycelium/u` with `{deviceUuid, hello}`
+   - Returns `{channelSeed, channelUuid, initiatorAuth}`
+   - `hello` is WASM-generated pairing public key
+2. QR code contains: `[UNAUTHORIZED_DEVICE_DRIVEN, channelSeed, publicKey]`
+3. Authenticated device scans QR, derives `ChannelJoinAuth` from `channelSeed`
+   via `WasmChannelSeed.derive_auth()`
+4. Device reads hello: `GET /u/{uuid}/1` with `ChannelJoinAuth` header
+5. Device sends reply: `PUT /u/{uuid}/2` with `ChannelJoinAuth` header
+   - Returns `{responderAuth}`
+6. Page reads reply: `GET /u/{uuid}/2` with `ChannelAuth` header
+7. Both sides derive shared key via WASM pairing session
+8. Device sends encrypted credentials over the channel
+
+**Auth headers:** `ChannelAuth` (initiator), `ChannelJoinAuth` (responder)
+— NOT standard Authorization headers.
+
+**Attack assessment:** Channel creation is unauthenticated, but pairing
+requires an authenticated device on the other end. Dead end without
+credentials.
+
+**WASM pairing classes:**
+- `WasmPairingCredentials`: ECDH keypair generation
+- `WasmPairingSetupCredentials`: Setup credential generation
+- `WasmPairingSessionStarterExistingDevice`: join, receive_hello, create_reply
+- `WasmPairingSessionStarterNewDevice`: init, create_hello, receive_reply, shared_key
+- `WasmChannelSeed`: new, derive_auth
+
+### 5.8 API Endpoint Catalog (Phase 5 Additions)
+
+| Endpoint | Method | Status | Notes |
+|----------|--------|--------|-------|
+| `/api/pre-registration-features` | POST | 200 | Feature flags (auto-sign-in, mycelium-forward-sign-in) |
+| `/api/v1/accountcookies` | GET | 200 | Returns `[]` — no account cookies |
+| `/api/v2/mycelium/u` | POST | 200 | **No auth required** — creates pairing channel |
+| `/api/v2/mycelium/u/{uuid}/{n}` | GET | 200/401 | Requires `ChannelAuth` header |
+| `/api/v1/confidential-computing/session` | POST | 422 | Exists, expects specific JSON struct |
+| `/api/v1/vault` | POST | 401 | Needs auth (Allow: POST only) |
+| `/api/v1/vault/items` | GET | 401 | Needs auth |
+| `/api/v1/vaults` | GET | 401 | Needs auth |
+| `/api/v1/user` | POST | 400 | Needs specific params (Allow: POST only) |
+| `/api/v1/account` | GET | 401 | Needs auth |
+| `/api/v2/session-restore/restore-key` | POST | 400 | Exists, unknown params |
+| `/api/v1/signup` | POST | 400 | Exists, probably disabled |
+| `/api/v1/invite` | POST | 401 | Needs auth |
+| `/api/v2/recovery-keys/session/new` | POST | 400 | Needs specific params |
+| `/api/v2/recovery-keys/policies` | GET | 401 | Needs auth |
+| `/debug/vars` | GET | 403 | Go expvar — blocked |
+| `/manifest.json` | GET | 200 | GCM sender ID only |
+
+### 5.9 HTML Head Configuration Dump
+
+The `<head>` tag exposes extensive configuration (acknowledged as
+intentional via `data-bug-researcher-notes`):
+
+| Attribute | Value | Notes |
+|-----------|-------|-------|
+| `data-env` | `prd` | Production environment |
+| `data-version` | `2248` | Web client version |
+| `data-gitrev` | `33a8e241e543` | Git revision |
+| `data-hostname` | `1password.com` | |
+| `data-sibling-domains` | `1password.ca,1password.eu,ent.1password.com` | |
+| `data-sentry-dsn` | `https://[pub]:[sec]@web-ui-sentry.1passwordservices.com/[id]` | Both keys in DSN |
+| `data-fcm-api-key` | `AIzaSyCs8WNa10YE5AVyfL33RBHBKQdYZMw7OB0` | Firebase Cloud Messaging |
+| `data-stripe-key` | `pk_live_F59R8NjiAi5Eu7MJcnHmdNjj` | Stripe publishable |
+| `data-brex-client-id` | `bri_b2df18d65bc82a948573537157eceb07` | |
+| `data-slack-client-id` | `36986904051.273534103040` | |
+
+All keys confirmed as public/publishable. Sentry DSN doesn't enable
+reading events (CORS blocks, store endpoint requires server-side auth).
+
+### 5.10 Support/Email Recovery Flow
+
+Support flow at `/support`: enter email → GET request returns
+`{"success": 1}` → page shows "An email with instructions has been sent".
+
+All tested emails return identical `{"success": 1}` — no account
+enumeration. Tested: ctf@, admin@, test@, poetry@, flag@, user@,
+demo@, challenge@ (all @bugbounty-ctf.1password.com).
+
+No server-side state created that we can exploit.
+
+### 5.11 Phase 5 Summary
+
+| Category | Tests Run | Finding |
+|----------|-----------|---------|
+| MITM/Injection | Iteration downgrade, SRP group, salt manipulation | Client min 10K iterations; SRPg-4096 only |
+| Account enum | auth/start with real/fake emails | Deterministic fake params (minor info leak) |
+| Recovery code | Format validation, API probing | Client-side only, 256-bit keyspace |
+| Mycelium | Channel creation, pairing protocol | Unauthenticated channel creation, but needs paired device |
+| Confidential computing | Field discovery, format probing | 422 for all payloads — unknown required struct |
+| API catalog | ~80 endpoint/method combinations | All authenticated endpoints return 401/400 |
+| Debug endpoints | /debug/vars bypass attempts | 403, no bypass found |
+| Service endpoints | 7 external service domains | All CORS-blocked |
+| Sentry | API read attempts | 401, can't read error events |
+| SSO/OIDC | 13 endpoint probes | All 404 |
+| Feature flags | pre-registration-features | Empty list returned |
+| HTML config | Head data attributes | All intentionally public |
+
+### Assessment After Phase 5
+
+The engagement remains blocked at the authentication wall. Phase 5
+confirmed that 1Password's client-side implementation is sound:
+
+1. **2SKD prevents offline attacks** — even with 10x iteration reduction,
+   the 128-bit Secret Key dominates the keyspace
+2. **SRP implementation is correct** — proper group validation, no
+   zero-key acceptance, constant-time-equivalent responses
+3. **No information leakage** — uniform error responses across all
+   endpoints; deterministic fake params prevent enumeration
+4. **Recovery requires cryptographic secrets** — client validates
+   locally, 256-bit recovery key space is infeasible
+5. **Mycelium requires authenticated device** — channel creation is
+   open but useless without a paired device
+6. **No alternative auth paths** — SSO, session-restore, signup, and
+   invite endpoints all require proper authentication
+
+The only remaining theoretical attack vectors are:
+- A server-side zero-day in the Go/Rust backend
+- A novel cryptographic attack against SRP-6a + 2SKD
+- A vulnerability in the WASM pairing/crypto modules
+- Starting credentials from the CTF organizers
+
+
+## Phase 6 — Tooling Expansion
+
+**Date:** 2026-04-24
+
+### 6.1 Circular Import Fix
+
+Fixed a circular import that broke the entire test suite:
+
+```
+clearwing.agent.tooling → clearwing.llm.native → clearwing.llm.__init__
+  → clearwing.llm.chat → clearwing.agent.tooling (ensure_agent_tool)
+```
+
+`ensure_agent_tool` at line 139 of `tooling.py` hadn't been defined yet when
+`chat.py` tried to import it at module init. Fix: moved the import in
+`chat.py` from module-level to lazy inside `bind_tools()`.
+
+### 6.2 Feature 4.12 — Credential Attack Tools
+
+Implemented 4 tools in `clearwing/agent/tools/crypto/credential_tools.py`
+(already wired and tested from a prior session):
+
+| Tool | Type | Purpose |
+|------|------|---------|
+| `analyze_2skd_entropy` | Offline | Calculate combined password×Secret Key keyspace; compare password-only vs 2SKD cracking costs at GPU price points |
+| `test_secret_key_validation` | Online | Test for factor separation — whether server distinguishes wrong-password from wrong-Secret-Key (timing, response body, status code) |
+| `enumerate_secret_key_format` | Online | Probe enrollment/auth endpoints for Secret Key format info; analyze A3-XXXXXX structure for fixed vs random components |
+| `offline_crack_setup` | Offline | Generate hashcat/john command lines for captured PBKDF2/SRP params; flags when 2SKD makes standard tools insufficient |
+
+Key finding from `analyze_2skd_entropy`: default parameters (40-bit password +
+128-bit Secret Key + 100K PBKDF2 iterations) yield 168-bit combined entropy —
+computationally infeasible with any foreseeable technology. The Secret Key is
+the dominant security factor.
+
+### 6.3 New Tool Modules (15 tools, 102→117 total)
+
+Gap analysis identified 5 areas where manual Playwright scripts were
+repeatedly needed. Built dedicated tool modules for each.
+
+#### 6.3.1 Mycelium Protocol Tools (`crypto/mycelium_tools.py`)
+
+4 tools for analyzing the device pairing protocol:
+
+| Tool | Purpose |
+|------|---------|
+| `mycelium_create_channel` | Create unencrypted (`u`) or encrypted (`v`) pairing channels — pre-auth, no credentials needed |
+| `mycelium_probe_channel` | Read/write channel segments with configurable auth headers (`ChannelAuth`, `ChannelJoinAuth`) |
+| `mycelium_fuzz_auth` | Test 10 auth bypass patterns: no auth, empty headers, random tokens, seed-as-auth, bearer format, zero auth |
+| `mycelium_test_race` | Fire concurrent join attempts to test if multiple devices can join or if segment data leaks to unauthorized joiners |
+
+Design: uses `OP-User-Agent` header matching 1Password's format. HTTP helper
+(`_http_request`) supports GET/POST/PUT with custom headers and logs to proxy
+history.
+
+#### 6.3.2 Recovery Code Tools (`crypto/recovery_tools.py`)
+
+3 tools for recovery code analysis:
+
+| Tool | Purpose |
+|------|---------|
+| `generate_recovery_codes` | Generate valid-format `1PRK-XXXXXX-...` codes (33-char base32, 52 random chars = 262 bits) |
+| `test_recovery_acceptance` | Submit codes to 8 common recovery endpoint paths; detect active endpoints and improper validation |
+| `analyze_recovery_entropy` | Calculate brute-force cost at various rates (online 10/s through offline 1B/s); assess lockout impact |
+
+Key finding: recovery codes have ~262 bits of entropy — exceeds AES-256.
+Even at 1 billion attempts/sec offline, exhaustion takes ~10^60 years.
+
+#### 6.3.3 Session/Token Replay Tools (`recon/session_tools.py`)
+
+3 tools replacing manual proxy-replay workflows:
+
+| Tool | Purpose |
+|------|---------|
+| `extract_session_tokens` | Parse proxy history for bearer tokens, session cookies, CSRF tokens, and custom auth headers |
+| `replay_with_mutations` | Replay a captured token with 11+ mutations: truncated, reversed, bit-flipped, case-changed, null-appended, random same-length |
+| `test_session_fixation` | Compare pre/post-auth cookies to detect session-like identifiers that survive authentication |
+
+#### 6.3.4 JS Bundle Analysis Tools (`recon/bundle_tools.py`)
+
+3 tools replacing one-off Playwright bundle search scripts:
+
+| Tool | Purpose |
+|------|---------|
+| `fetch_js_bundles` | Fetch page HTML, extract `<script src>` tags, download all bundles (configurable max size/count) |
+| `search_bundle_patterns` | Search bundles against 11 built-in regex patterns (hardcoded secrets, flags, API keys, JWTs, debug code, eval, innerHTML, postMessage) plus custom terms |
+| `extract_api_routes` | Extract API endpoint definitions from fetch calls, route constants, and method-specific patterns; build API surface map with method detection |
+
+Built-in patterns cover: `hardcoded_secret`, `flag_format`, `private_key`,
+`aws_key`, `jwt`, `internal_url`, `debug_code`, `console_log`, `eval_usage`,
+`innerHTML`, `postMessage_star`.
+
+#### 6.3.5 Confidential Computing Tools (`recon/cc_tools.py`)
+
+2 tools for the `/api/v1/confidential-computing/session` endpoint:
+
+| Tool | Purpose |
+|------|---------|
+| `cc_discover_schema` | Iteratively probe serde error messages to discover required JSON fields; builds payload field-by-field with type inference from error text |
+| `cc_fuzz_fields` | Fuzz each discovered field with 16 value types: empty, null, zero, negative, large int, booleans, arrays, objects, long strings, XSS, SQLi, null bytes, unicode, UUID, base64 |
+
+Schema discovery logic: parse `missing field`, `unknown field`, and
+`expected` patterns from Rust serde errors; infer types from `u64`,
+`bool`, `str`, `Vec`, `struct` keywords; fall back to trying all type
+guesses when no new fields are revealed.
+
+### 6.4 Knowledge Graph Integration
+
+All 15 new tools have knowledge graph populators in `runtime.py`:
+
+- **Mycelium**: Records protocol, channels, auth bypass vulns, race conditions
+- **Recovery**: Records accepted codes as critical vulns, entropy as key material
+- **Session**: Records weak token validation and session fixation as vulns
+- **Bundle**: Records leaked secrets/flags as vulns, discovered routes as endpoints
+- **CC**: Records discovered schema, accepted fuzz values as vulns
+
+### 6.5 Test Coverage
+
+| Test File | Tests | Status |
+|-----------|-------|--------|
+| `test_credential_tools.py` | 33 | All pass |
+| `test_mycelium_tools.py` | 16 | All pass |
+| `test_recovery_tools.py` | 15 | All pass |
+| `test_session_tools.py` | 12 | All pass |
+| `test_bundle_tools.py` | 13 | All pass |
+| `test_cc_tools.py` | 11 | All pass |
+| `test_tool_registry.py` | 3 | All pass (count updated 102→117) |
+| `test_kdf_tools.py` | 34 | All pass (no regression) |
+| `test_srp_tools.py` | 13 | All pass (no regression) |
+| **Total** | **157** | **All pass** |
+
+All files lint-clean (`ruff check` passes).
+
+### 6.6 Current Tool Inventory Summary
+
+| Domain | Module | Tool Count |
+|--------|--------|------------|
+| Scan | scanner, tls | 8 |
+| Exploit | exploit, payload, search | 13 |
+| Crypto | SRP, KDF, vault, credential, mycelium, recovery, timing | 26 |
+| Recon | browser, proxy, webcrypto, auth_recorder, mitm, session, bundle, CC, pivot | 32 |
+| Data | knowledge, memory, CVE, analysis | 10 |
+| Meta | reporting, utility, remediation, wargame, OT, sourcehunt | 18 |
+| Ops | kali, MCP, dynamic, skills | 10 |
+| **Total** | | **117** |
